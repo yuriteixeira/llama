@@ -29,6 +29,35 @@ The server exposes an OpenAI-compatible API endpoint on **port 8080**.
 | **Vanilla** | `./serve.sh` | 32,768 | q8_0 | Shorter contexts, standard behavior |
 | **Buun** | `./serve-buun.sh` | 262,144 | turbo4/turbo3 | Long contexts, MoE-optimized |
 
+## Running as a Systemd Service
+
+Run the server automatically on login using systemd user services:
+
+```bash
+# Enable + start the vanilla variant
+./manage-server.sh vanilla enable
+./manage-server.sh vanilla start
+
+# Or the buun variant
+./manage-server.sh buun enable
+./manage-server.sh buun start
+
+# View live logs
+./manage-server.sh vanilla logs
+
+# Stop / restart
+./manage-server.sh buun stop
+./manage-server.sh buun restart
+```
+
+Only one variant can run at a time (both default to port **8080**). Modify the port in the `.service` file to run both simultaneously.
+
+For startup immediately after reboot, before you log in, enable user lingering once:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
 ## Customization
 
 Override defaults via environment variables:
@@ -80,16 +109,19 @@ python3 scripts/bench-llama-suite.py
 
 ```
 llama/
-├── serve.sh            # Vanilla llama.cpp launcher
-├── serve-buun.sh       # Optimized buun-llama-cpp launcher
-├── models/             # GGUF model storage
+├── serve.sh                      # Vanilla llama.cpp launcher
+├── serve-buun.sh                 # Optimized buun-llama-cpp launcher
+├── manage-server.sh              # Systemd service helper
+├── llama-server.service          # Systemd unit (vanilla)
+├── llama-server-buun.service     # Systemd unit (buun)
+├── models/                       # GGUF model storage
 │   └── unsloth/
-├── versions/           # Server builds
+├── versions/                     # Server builds
 │   ├── vanilla/
 │   └── buun/
-├── scripts/            # Benchmark tools
-└── docs/               # Notes & references
-    └── clues.md        # Moises' setup notes
+├── scripts/                      # Benchmark tools
+└── docs/                         # Notes & references
+    └── clues.md                  # Moises' setup notes
 ```
 
 ## Hardware

@@ -8,18 +8,21 @@ This repository contains a local LLM inference setup using **llama.cpp** to serv
 
 ```
 llama/
-├── serve.sh           # Vanilla llama.cpp launcher
-├── serve-buun.sh      # Spiritbuun fork launcher (optimized)
-├── models/            # GGUF model files
-│   └── unsloth/       # Default: Qwen3.6-35B-A3B (IQ4_NL quantized)
-├── versions/          # Server binary builds
-│   ├── vanilla/       # Standard llama.cpp build
-│   └── buun/          # spiritbuun/buun-llama-cpp fork
-├── scripts/           # Benchmarking scripts
+├── serve.sh                       # Vanilla llama.cpp launcher
+├── serve-buun.sh                  # Spiritbuun fork launcher (optimized)
+├── manage-server.sh               # Systemd service manager helper
+├── llama-server.service           # Systemd unit (vanilla)
+├── llama-server-buun.service      # Systemd unit (buun)
+├── models/                        # IMPORTANT: Download the GGUF model files HERE, namespaces mapped to dirs
+│   └── unsloth/                   # Default: Qwen3.6-35B-A3B (IQ4_NL quantized)
+├── versions/                      # Server binary builds
+│   ├── vanilla/                   # Standard llama.cpp build
+│   └── buun/                      # spiritbuun/buun-llama-cpp fork
+├── scripts/                       # Benchmarking scripts
 │   ├── bench-llama-suite.py
 │   └── run-llama-bench-matrix.py
-└── docs/              # Reference notes
-    └── clues.md       # Moises' setup notes & community tips
+└── docs/                          # Reference notes
+    └── clues.md                   # Moises' setup notes & community tips
 ```
 
 ## Server Launchers
@@ -67,6 +70,38 @@ Key differences from vanilla:
 | `--cache-ram` | `0` | Disable RAM cache offload |
 | `--no-cache-idle-slots` | — | Disable idle slot caching |
 
+## Systemd Services
+
+Both variants ship as user-scoped systemd services for auto-start on login.
+
+```bash
+# Enable + start vanilla variant
+./manage-server.sh vanilla enable
+./manage-server.sh vanilla start
+
+# Or the buun variant
+./manage-server.sh buun enable
+./manage-server.sh buun start
+
+# View logs (follow mode)
+./manage-server.sh vanilla logs
+./manage-server.sh buun logs
+
+# Stop either service
+./manage-server.sh vanilla stop
+./manage-server.sh buun stop
+```
+
+> **Note:** Both variants default to port 8080 — only run one at a time, or change the `--port` in the respective `.service` file.
+
+Services are installed to `~/.config/systemd/user/` on first use. They auto-restart on crash (10 s delay).
+
+For startup immediately after reboot, before interactive login, enable user lingering once:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
 ## Environment Variables
 
 Both scripts respect these overrides:
@@ -78,7 +113,7 @@ Both scripts respect these overrides:
 - `THREADS` / `THREADS_BATCH` / `THREADS_HTTP` — threading
 - `CACHE_TYPE_K` / `CACHE_TYPE_V` — KV cache types
 - `N_CPU_MOE` — MoE CPU thread count (buun only)
-- `REASONING` — toggle reasoning mode (`on`/`on`)
+- `REASONING` — toggle reasoning mode (`on`/`off`)
 - `MODEL` — alias for the served model
 
 ## Benchmarking

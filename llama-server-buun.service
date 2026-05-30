@@ -1,0 +1,55 @@
+[Unit]
+Description=Llama.cpp Local LLM Server (Buun Fork — MoE Optimized)
+Documentation=https://github.com/spiritbuun/buun-llama-cpp
+After=network-online.target gpu.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Working directory
+WorkingDirectory=/home/yuriteixeira/Workspaces/local/services/llama
+
+# The actual server binary and its arguments (mirrors serve-buun.sh defaults)
+ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/buun/src/buun-llama-cpp/build/bin/llama-server \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --model /home/yuriteixeira/Workspaces/local/services/llama/models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf \
+  --alias selected \
+  --ctx-size 262144 \
+  --cache-type-k turbo4 \
+  --cache-type-v turbo3 \
+  --threads 12 \
+  --threads-batch 12 \
+  --threads-http 4 \
+  --n-cpu-moe 33 \
+  --device CUDA0 \
+  --parallel 1 \
+  --flash-attn on \
+  --metrics \
+  --cache-ram 0 \
+  --reasoning off \
+  --no-cache-idle-slots \
+  --no-mmproj
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Resource limits
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llama-server-buun
+
+# Security hardening
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
