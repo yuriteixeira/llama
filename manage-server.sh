@@ -26,9 +26,9 @@ INSTALLED_SERVICE_FILE="$USER_SYSTEMD_DIR/$SERVICE_NAME"
 
 install_unit() {
   mkdir -p "$USER_SYSTEMD_DIR"
-  cp "$SERVICE_FILE" "$INSTALLED_SERVICE_FILE"
+  ln -sfn "$SERVICE_FILE" "$INSTALLED_SERVICE_FILE"
   systemctl --user daemon-reload
-  echo "Installed $SERVICE_NAME to $INSTALLED_SERVICE_FILE"
+  echo "Installed $SERVICE_NAME as symlink: $INSTALLED_SERVICE_FILE -> $SERVICE_FILE"
 }
 
 case "$ACTION" in
