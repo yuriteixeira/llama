@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import curses
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config_store import find_saved_configs, load_config, remember_config, save_config, slugify
@@ -59,26 +60,65 @@ def main_menu(stdscr, state: TuiState) -> Path | None:
 
 def draw_main_menu(stdscr, state: TuiState) -> None:
     stdscr.clear()
-    stdscr.addstr(0, 0, "Buun llama-bench TUI")
-    stdscr.addstr(1, 0, "Configure two reproducible benchmark profiles")
-    stdscr.addstr(2, 0, f"Run prefix: {state.cfg.run_prefix}")
-    for i, action in enumerate(state.actions):
-        attr = curses.A_REVERSE if i == state.selected else curses.A_NORMAL
-        stdscr.addstr(4 + i, 0, action, attr)
-    draw_profile_summaries(stdscr, state.cfg.profiles)
+    layout = main_menu_layout()
+    draw_header_panel(stdscr, layout["header"], state.cfg.run_prefix)
+    draw_actions_panel(stdscr, layout["actions"], state.actions, state.selected)
+    draw_profiles_panel(stdscr, layout["profiles"], state.cfg.profiles)
+    draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Enter select  •  q/Esc quit")
 
 
-def draw_profile_summaries(stdscr, profiles: list[Profile]) -> None:
-    stdscr.addstr(11, 0, "Profiles:")
-    for i, profile in enumerate(profiles):
-        stdscr.addstr(12 + i, 0, profile_summary(profile)[: curses.COLS - 1])
+def draw_header_panel(stdscr, panel: "Panel", run_prefix: str) -> None:
+    draw_panel(stdscr, panel, "Buun llama-bench TUI")
+    write_in_panel(stdscr, panel, 0, "Configure two reproducible benchmark profiles")
+    write_in_panel(stdscr, panel, 1, f"Run prefix: {run_prefix}")
 
 
-def profile_summary(profile: Profile) -> str:
-    return (
-        f"{profile.name}: {model_label(profile.model)}, cache={profile.cache_strategy}, "
-        f"depths={profile.depths}, t={profile.threads}, moe={profile.n_cpu_moe}, fa={profile.flash_attn}"
-    )
+def draw_actions_panel(stdscr, panel: "Panel", actions: list[str], selected: int) -> None:
+    draw_panel(stdscr, panel, "Actions")
+    row = 0
+    for i, action in enumerate(actions):
+        if row >= panel.inner_height:
+            return
+        attr = curses.A_REVERSE if i == selected else curses.A_NORMAL
+        write_in_panel(stdscr, panel, row, f"> {action}" if i == selected else f"  {action}", attr)
+        row += 1
+        if i in {1, 3} and row < panel.inner_height:
+            write_action_separator(stdscr, panel, row)
+            row += 1
+
+
+def write_action_separator(stdscr, panel: "Panel", row: int) -> None:
+    write_in_panel(stdscr, panel, row, "─" * panel.inner_width)
+
+
+def draw_profiles_panel(stdscr, panel: "Panel", profiles: list[Profile]) -> None:
+    draw_panel(stdscr, panel, "Profiles")
+    row = 0
+    for profile in profiles:
+        row = draw_profile_summary(stdscr, panel, profile, row)
+
+
+def draw_profile_summary(stdscr, panel: "Panel", profile: Profile, row: int) -> int:
+    lines = [
+        f"{profile.name}: {Path(profile.model).name}",
+        f"cache={profile.cache_strategy} depths={profile.depths}",
+        f"batch={profile.batch_size} ubatch={profile.ubatch_size} threads={profile.threads}",
+        f"moe={profile.n_cpu_moe} ngl={profile.gpu_layers} fa={profile.flash_attn} mmap={profile.no_mmap}",
+    ]
+    for line in lines:
+        if row >= panel.inner_height:
+            return row
+        write_in_panel(stdscr, panel, row, line)
+        row += 1
+    if row < panel.inner_height:
+        write_in_panel(stdscr, panel, row, "")
+        row += 1
+    return row
+
+
+def draw_help_panel(stdscr, panel: "Panel", text: str) -> None:
+    draw_panel(stdscr, panel, "Keys")
+    write_in_panel(stdscr, panel, 0, text)
 
 
 def handle_main_menu_key(stdscr, state: TuiState, key: int):
@@ -170,13 +210,45 @@ def edit_profile(stdscr, profile: Profile, models: list[str]) -> None:
 
 def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int) -> None:
     stdscr.clear()
-    stdscr.addstr(0, 0, f"Editing {profile.name}")
-    stdscr.addstr(1, 0, "↑/↓ move, Enter edit, q back")
-    for i, key in enumerate(fields):
+    layout = profile_editor_layout()
+    draw_profile_editor_header(stdscr, layout["header"], profile)
+    draw_profile_fields_panel(stdscr, layout["fields"], profile, fields, idx)
+    draw_selected_field_panel(stdscr, layout["details"], profile, fields[idx])
+    draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Enter edit  •  q/Esc back")
+
+
+def draw_profile_editor_header(stdscr, panel: "Panel", profile: Profile) -> None:
+    draw_panel(stdscr, panel, f"Editing {profile.name}")
+    write_in_panel(stdscr, panel, 0, Path(profile.model).name or "No model selected")
+    write_in_panel(stdscr, panel, 1, f"cache={profile.cache_strategy} depths={profile.depths}")
+
+
+def draw_profile_fields_panel(stdscr, panel: "Panel", profile: Profile, fields: list[str], idx: int) -> None:
+    draw_panel(stdscr, panel, "Parameters")
+    for i, key in enumerate(fields[: panel.inner_height]):
         value = getattr(profile, key)
         shown = model_label(value) if key == "model" and value else value
         attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
-        stdscr.addstr(3 + i, 0, f"{key:15} {shown}"[: curses.COLS - 1], attr)
+        write_in_panel(stdscr, panel, i, f"{key:15} {shown}", attr)
+
+
+def draw_selected_field_panel(stdscr, panel: "Panel", profile: Profile, field: str) -> None:
+    draw_panel(stdscr, panel, "Selected parameter")
+    lines = selected_field_lines(profile, field, panel.inner_width)
+    for i, line in enumerate(lines[: panel.inner_height]):
+        write_in_panel(stdscr, panel, i, line)
+
+
+def selected_field_lines(profile: Profile, field: str, width: int) -> list[str]:
+    value = getattr(profile, field)
+    lines = [f"{field} = {value}", ""]
+    description = FIELD_DESCRIPTIONS.get(field, "")
+    if field in {"gpu_layers", "n_cpu_moe"}:
+        description = enrich_preset_description(profile, field, description)
+    for paragraph in description.split(". "):
+        lines.extend(wrap_text(paragraph.strip(), width))
+        lines.append("")
+    return lines
 
 
 def edit_profile_field(stdscr, profile: Profile, field: str, models: list[str]) -> None:
@@ -239,17 +311,31 @@ def choose_from(stdscr, title: str, options: list[str], current: str, descriptio
 
 def draw_choice_screen(stdscr, title: str, options: list[str], idx: int, description: str, allow_edit: bool) -> None:
     stdscr.clear()
-    stdscr.addstr(0, 0, title)
-    row = draw_description_header(stdscr, 2, description)
-    help_text = "↑/↓ select, Enter accept, q cancel"
+    layout = choice_layout()
+    draw_panel(stdscr, layout["title"], title)
+    write_in_panel(stdscr, layout["title"], 0, title)
+    draw_description_panel(stdscr, layout["description"], description)
+    draw_options_panel(stdscr, layout["options"], options, idx)
+    help_text = "↑/↓ select  •  Enter accept  •  q/Esc cancel"
     if allow_edit:
-        help_text += ", Tab edit highlighted"
-    stdscr.addstr(row, 0, help_text[: curses.COLS - 1])
-    row += 2
-    for i, opt in enumerate(options):
-        marker = "> " if i == idx else "  "
-        attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
-        stdscr.addstr(row + i, 0, marker + opt[: curses.COLS - 4], attr)
+        help_text += "  •  Tab edit highlighted"
+    draw_help_panel(stdscr, layout["help"], help_text)
+
+
+def draw_description_panel(stdscr, panel: "Panel", description: str) -> None:
+    draw_panel(stdscr, panel, "Description")
+    lines = wrap_text(description, panel.inner_width) if description else ["No description available."]
+    for i, line in enumerate(lines[: panel.inner_height]):
+        write_in_panel(stdscr, panel, i, line)
+
+
+def draw_options_panel(stdscr, panel: "Panel", options: list[str], idx: int) -> None:
+    draw_panel(stdscr, panel, "Options")
+    start = visible_window_start(idx, panel.inner_height, len(options))
+    for row, opt_idx in enumerate(range(start, min(len(options), start + panel.inner_height))):
+        marker = "> " if opt_idx == idx else "  "
+        attr = curses.A_REVERSE if opt_idx == idx else curses.A_NORMAL
+        write_in_panel(stdscr, panel, row, marker + options[opt_idx], attr)
 
 
 def prompt_text(stdscr, title: str, initial: str, description: str = "") -> str:
@@ -270,16 +356,25 @@ def prompt_text(stdscr, title: str, initial: str, description: str = "") -> str:
 
 def draw_text_prompt(stdscr, title: str, description: str, value: list[str], pos: int) -> int:
     stdscr.clear()
-    stdscr.addstr(0, 0, title[: curses.COLS - 1])
-    row = draw_description_header(stdscr, 2, description)
-    stdscr.addstr(row, 0, "Enter accept, Esc cancel, arrows move, Backspace delete"[: curses.COLS - 1])
-    row += 2
-    visible_width = max(1, curses.COLS - 1)
+    layout = text_prompt_layout()
+    draw_panel(stdscr, layout["title"], title)
+    write_in_panel(stdscr, layout["title"], 0, title)
+    draw_description_panel(stdscr, layout["description"], description)
+    cursor_row = draw_input_panel(stdscr, layout["input"], value, pos)
+    draw_help_panel(stdscr, layout["help"], "Enter accept  •  Esc cancel  •  arrows move  •  Backspace delete")
+    return cursor_row
+
+
+def draw_input_panel(stdscr, panel: "Panel", value: list[str], pos: int) -> int:
+    draw_panel(stdscr, panel, "Value")
+    visible_width = max(1, panel.inner_width)
     start = max(0, pos - visible_width + 1)
     text = "".join(value[start : start + visible_width])
-    stdscr.addstr(row, 0, text.ljust(visible_width))
-    stdscr.move(row, pos - start)
-    return row
+    write_in_panel(stdscr, panel, 0, text.ljust(visible_width))
+    cursor_row = panel.row + 1
+    cursor_col = panel.col + 2 + pos - start
+    safe_move(stdscr, cursor_row, cursor_col)
+    return cursor_row
 
 
 def handle_text_key(key: int, value: list[str], pos: int, initial: str) -> int | str:
@@ -307,20 +402,124 @@ def handle_text_key(key: int, value: list[str], pos: int, initial: str) -> int |
     return pos
 
 
-def draw_description_header(stdscr, start_row: int, description: str, max_lines: int = 6) -> int:
-    if not description:
-        return start_row
-    width = max(20, curses.COLS - 1)
-    inner_width = max(1, width - 4)
-    lines = wrap_text(description, inner_width)[:max_lines]
-    border = "+" + "-" * (width - 2) + "+"
-    stdscr.addstr(start_row, 0, border[: curses.COLS - 1])
-    row = start_row + 1
-    for line in lines:
-        stdscr.addstr(row, 0, ("| " + line.ljust(inner_width) + " |")[: curses.COLS - 1])
-        row += 1
-    stdscr.addstr(row, 0, border[: curses.COLS - 1])
-    return row + 2
+@dataclass(frozen=True)
+class Panel:
+    row: int
+    col: int
+    height: int
+    width: int
+
+    @property
+    def inner_height(self) -> int:
+        return max(0, self.height - 2)
+
+    @property
+    def inner_width(self) -> int:
+        return max(1, self.width - 4)
+
+
+def main_menu_layout() -> dict[str, Panel]:
+    rows, cols = screen_size()
+    header = Panel(0, 0, 4, cols)
+    help_panel = Panel(max(0, rows - 3), 0, 3, cols)
+    body_height = max(3, rows - header.height - help_panel.height)
+    left_width = max(28, min(38, cols // 3))
+    return {
+        "header": header,
+        "actions": Panel(header.height, 0, body_height, left_width),
+        "profiles": Panel(header.height, left_width, body_height, cols - left_width),
+        "help": help_panel,
+    }
+
+
+def profile_editor_layout() -> dict[str, Panel]:
+    rows, cols = screen_size()
+    header = Panel(0, 0, 4, cols)
+    help_panel = Panel(max(0, rows - 3), 0, 3, cols)
+    body_height = max(3, rows - header.height - help_panel.height)
+    left_width = max(36, min(56, cols // 2))
+    return {
+        "header": header,
+        "fields": Panel(header.height, 0, body_height, left_width),
+        "details": Panel(header.height, left_width, body_height, cols - left_width),
+        "help": help_panel,
+    }
+
+
+def choice_layout() -> dict[str, Panel]:
+    rows, cols = screen_size()
+    title = Panel(0, 0, 3, cols)
+    desc_height = min(9, max(4, rows // 4))
+    help_panel = Panel(max(0, rows - 3), 0, 3, cols)
+    options_row = title.height + desc_height
+    options_height = max(3, rows - options_row - help_panel.height)
+    return {
+        "title": title,
+        "description": Panel(title.height, 0, desc_height, cols),
+        "options": Panel(options_row, 0, options_height, cols),
+        "help": help_panel,
+    }
+
+
+def text_prompt_layout() -> dict[str, Panel]:
+    rows, cols = screen_size()
+    title = Panel(0, 0, 3, cols)
+    desc_height = min(9, max(4, rows // 4))
+    input_panel = Panel(title.height + desc_height, 0, 3, cols)
+    help_panel = Panel(max(input_panel.row + input_panel.height, rows - 3), 0, 3, cols)
+    return {
+        "title": title,
+        "description": Panel(title.height, 0, desc_height, cols),
+        "input": input_panel,
+        "help": help_panel,
+    }
+
+
+def screen_size() -> tuple[int, int]:
+    # Keep one column unused. Many curses terminals raise or clip when writing
+    # into the final screen column, which would hide the right panel border.
+    return max(10, curses.LINES), max(1, curses.COLS - 1)
+
+
+def draw_panel(stdscr, panel: Panel, title: str = "") -> None:
+    if panel.height <= 0 or panel.width <= 1:
+        return
+    horizontal = "─" * max(0, panel.width - 2)
+    safe_addstr(stdscr, panel.row, panel.col, "┌" + horizontal + "┐")
+    for row in range(panel.row + 1, panel.row + panel.height - 1):
+        safe_addstr(stdscr, row, panel.col, "│" + " " * max(0, panel.width - 2) + "│")
+    safe_addstr(stdscr, panel.row + panel.height - 1, panel.col, "└" + horizontal + "┘")
+    if title:
+        safe_addstr(stdscr, panel.row, panel.col + 2, f" {title} "[: max(0, panel.width - 4)], curses.A_BOLD)
+
+
+def write_in_panel(stdscr, panel: Panel, row: int, text: str, attr: int = curses.A_NORMAL) -> None:
+    if row < 0 or row >= panel.inner_height:
+        return
+    safe_addstr(stdscr, panel.row + 1 + row, panel.col + 2, text[: panel.inner_width].ljust(panel.inner_width), attr)
+
+
+def safe_addstr(stdscr, row: int, col: int, text: str, attr: int = curses.A_NORMAL) -> None:
+    if row < 0 or col < 0 or row >= curses.LINES or col >= curses.COLS:
+        return
+    try:
+        stdscr.addstr(row, col, text[: max(0, curses.COLS - col - 1)], attr)
+    except curses.error:
+        pass
+
+
+def safe_move(stdscr, row: int, col: int) -> None:
+    try:
+        stdscr.move(min(row, curses.LINES - 1), min(col, curses.COLS - 1))
+    except curses.error:
+        pass
+
+
+def visible_window_start(selected: int, window_size: int, item_count: int) -> int:
+    if item_count <= window_size:
+        return 0
+    half = max(1, window_size // 2)
+    return max(0, min(selected - half, item_count - window_size))
 
 
 def wrap_text(text: str, width: int) -> list[str]:
