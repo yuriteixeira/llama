@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from .paths import BENCH, CONFIG_DIR, LAST_CONFIG
-from .profile import BenchConfig, CACHE_STRATEGIES, Profile
+from .profile import BenchConfig, Profile, normalize_cache_type, resolve_cache_types
 
 
 def slugify(value: str) -> str:
@@ -44,7 +44,7 @@ def save_config(cfg: BenchConfig, path: Path) -> None:
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     for profile in cfg.profiles:
-        k, v = CACHE_STRATEGIES[profile.cache_strategy]
+        k, v = resolve_cache_types(profile)
         cp[profile.name] = {key: value for key, value in profile.items()}
         cp[profile.name]["cache_type_k"] = k
         cp[profile.name]["cache_type_v"] = v
@@ -67,6 +67,17 @@ def load_config(path: Path) -> BenchConfig:
         for key, _ in p.items():
             if key in cp[section]:
                 setattr(p, key, cp[section][key])
+        k_explicit = normalize_cache_type(p.cache_type_k)
+        v_explicit = normalize_cache_type(p.cache_type_v)
+        if k_explicit:
+            p.cache_type_k = k_explicit
+        if v_explicit:
+            p.cache_type_v = v_explicit
+        k, v = resolve_cache_types(p)
+        if not k_explicit:
+            p.cache_type_k = k
+        if not v_explicit:
+            p.cache_type_v = v
         profiles.append(p)
     if profiles:
         cfg.profiles = profiles

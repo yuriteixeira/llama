@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .paths import BENCH, ROOT, SERVER
-from .profile import CACHE_STRATEGIES, Profile
+from .profile import Profile, resolve_cache_types
 
 
 def is_set(value: str) -> bool:
@@ -28,7 +28,7 @@ def bool_flag_value(value: str) -> str:
 
 
 def profile_server_command(profile: Profile) -> list[str]:
-    ctk, ctv = CACHE_STRATEGIES.get(profile.cache_strategy, CACHE_STRATEGIES["turbo"])
+    ctk, ctv = resolve_cache_types(profile)
     model_path = Path(profile.model)
     if not model_path.is_absolute():
         model_path = ROOT / model_path
@@ -74,7 +74,7 @@ def best_server_ctx_size(profile: Profile) -> str:
 
 
 def profile_command(profile: Profile, raw_path: Path) -> list[str]:
-    ctk, ctv = CACHE_STRATEGIES.get(profile.cache_strategy, CACHE_STRATEGIES["turbo"])
+    ctk, ctv = resolve_cache_types(profile)
     model_path = Path(profile.model)
     if not model_path.is_absolute():
         model_path = ROOT / model_path

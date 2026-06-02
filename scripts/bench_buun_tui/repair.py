@@ -36,6 +36,11 @@ def diagnose_failure(output: str) -> str:
     ]):
         return "timeout"
     if any(token in text for token in [
+        "does not divide n_embd_head_k",
+        "does not divide n_embd_head_v",
+    ]):
+        return "cache_type_mismatch"
+    if any(token in text for token in [
         "cudamalloc failed: out of memory",
         "failed to allocate cuda",
         "failed to allocate compute",
@@ -87,7 +92,7 @@ def next_repair_step(
             ordered.append(candidate(ngl, moe - 1, "RAM OOM: decrease n_cpu_moe by 1"))
         if ngl < block_count + 1:
             ordered.append(candidate(ngl + 1, moe if moe is not None else None, "RAM OOM: increase gpu_layers by 1"))
-    elif diagnosis == "load_error":
+    elif diagnosis in {"load_error", "cache_type_mismatch"}:
         return None
     else:
         if supports_moe is not False and moe is not None and moe < block_count:

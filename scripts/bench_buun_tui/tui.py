@@ -20,7 +20,9 @@ from .best_known import (
 from .commands import profile_server_command
 from .config_store import find_saved_configs, load_config, remember_config, save_config, slugify
 from .models import (
+    cache_type_is_compatible,
     choose_default_model,
+    compatible_cache_type_options,
     find_models,
     gpu_layer_options,
     model_description,
@@ -33,7 +35,7 @@ from .offload import OffloadError, calculate_offload, format_bytes
 from .process_stream import StreamStatus
 from .repair import diagnose_failure, next_repair_step
 from .paths import CONFIG_DIR
-from .profile import BenchConfig, CACHE_STRATEGIES, FIELD_DESCRIPTIONS, PRESETS, Profile
+from .profile import BenchConfig, CACHE_STRATEGIES, FIELD_DESCRIPTIONS, PRESETS, Profile, apply_cache_strategy, cache_types_text, resolve_cache_types
 from .smoke import run_smoke_test, smoke_test_command, smoke_test_context
 
 
@@ -125,7 +127,7 @@ def draw_profiles_panel(stdscr, panel: "Panel", profiles: list[Profile]) -> None
 def draw_profile_summary(stdscr, panel: "Panel", profile: Profile, row: int) -> int:
     lines = [
         f"{profile.name}: {model_label(profile.model)}",
-        f"cache={profile.cache_strategy} depths={profile.depths}",
+        f"cache={profile.cache_strategy} kv={cache_types_text(profile)} depths={profile.depths}",
         f"batch={profile.batch_size} ubatch={profile.ubatch_size} threads={profile.threads}",
         f"moe={profile.n_cpu_moe} ngl={profile.gpu_layers} fa={profile.flash_attn} mmap={profile.no_mmap}",
     ]
@@ -427,7 +429,7 @@ def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int, s
 def draw_profile_editor_header(stdscr, panel: "Panel", profile: Profile) -> None:
     draw_panel(stdscr, panel, f"Editing {profile.name}")
     write_in_panel(stdscr, panel, 0, model_label(profile.model))
-    write_in_panel(stdscr, panel, 1, f"cache={profile.cache_strategy} depths={profile.depths}")
+    write_in_panel(stdscr, panel, 1, f"cache={profile.cache_strategy} kv={cache_types_text(profile)} depths={profile.depths}")
 
 
 def draw_profile_fields_panel(stdscr, panel: "Panel", profile: Profile, fields: list[str], idx: int, scroll: int) -> None:
@@ -647,7 +649,7 @@ def smoke_test_preview_lines(profile: Profile, desired_context: int) -> list[str
         f"n_cpu_moe: {profile.n_cpu_moe}",
         f"batch_size: {profile.batch_size}  ubatch_size: {profile.ubatch_size}",
         f"threads: {profile.threads}",
-        f"cache_strategy: {profile.cache_strategy}  flash_attn: {profile.flash_attn}  no_mmap: {profile.no_mmap}",
+        f"cache_strategy: {profile.cache_strategy}  cache_k/v: {cache_types_text(profile)}  flash_attn: {profile.flash_attn}  no_mmap: {profile.no_mmap}",
         "",
         "This runs a minimal llama-bench pass to validate context creation and model load.",
         "",
@@ -882,6 +884,14 @@ def edit_profile_field(stdscr, profile: Profile, field: str, models: list[str]) 
     cur = getattr(profile, field)
     description = FIELD_DESCRIPTIONS.get(field, "")
     new_value = choose_field_value(stdscr, profile, field, cur, description, models)
+    if field == "cache_strategy":
+        if new_value != profile.cache_strategy:
+            apply_cache_strategy(profile, new_value)
+        return
+    if field == "model":
+        setattr(profile, field, new_value)
+        reconcile_cache_types_for_model(profile)
+        return
     setattr(profile, field, new_value)
 
 
@@ -903,7 +913,12 @@ def choose_model(stdscr, current: str, description: str, models: list[str]) -> s
 
 
 def choose_preset_value(stdscr, profile: Profile, field: str, cur: str, description: str) -> str:
-    options = gpu_layer_options(profile.model) if field == "gpu_layers" else PRESETS[field]
+    if field == "gpu_layers":
+        options = gpu_layer_options(profile.model)
+    elif field in {"cache_type_k", "cache_type_v"}:
+        options = compatible_cache_type_options(profile.model, field)
+    else:
+        options = PRESETS[field]
     description = enrich_preset_description(profile, field, description)
     picked = choose_from(stdscr, f"Choose {field}", options, cur, description, allow_edit=True)
     if picked == "custom":
@@ -911,11 +926,43 @@ def choose_preset_value(stdscr, profile: Profile, field: str, cur: str, descript
     return picked
 
 
+def reconcile_cache_types_for_model(profile: Profile) -> None:
+    if not profile.model:
+        return
+    k_opts = compatible_cache_type_options(profile.model, "cache_type_k")
+    v_opts = compatible_cache_type_options(profile.model, "cache_type_v")
+    meta = model_metadata(profile.model)
+    key_len = meta.get("key_length")
+    val_len = meta.get("value_length")
+    resolved_k, resolved_v = resolve_cache_types(profile)
+    if cache_type_is_compatible(resolved_k, key_len) and cache_type_is_compatible(resolved_v, val_len):
+        return
+    if "q8_0" in k_opts and "q8_0" in v_opts:
+        profile.cache_strategy = "q8"
+        profile.cache_type_k = ""
+        profile.cache_type_v = ""
+        return
+    if "f16" in k_opts and "f16" in v_opts:
+        profile.cache_strategy = "f16"
+        profile.cache_type_k = ""
+        profile.cache_type_v = ""
+        return
+    profile.cache_strategy = "unset"
+    profile.cache_type_k = k_opts[0] if k_opts else ""
+    profile.cache_type_v = v_opts[0] if v_opts else ""
+
+
 def enrich_preset_description(profile: Profile, field: str, description: str) -> str:
     if field == "gpu_layers":
         return f"{description} {model_description(profile.model)} Suggested values are based on GGUF block_count when readable."
     if field == "n_cpu_moe":
         return f"{description} {model_description(profile.model)} For MoE models, choose up to the layer/block_count; e.g. 33 of 40 keeps most experts on CPU."
+    if field in {"cache_type_k", "cache_type_v"}:
+        head_key = "key_length" if field == "cache_type_k" else "value_length"
+        head_dim = model_metadata(profile.model).get(head_key) if profile.model else None
+        compat = ", ".join(compatible_cache_type_options(profile.model, field)[:8])
+        extra = f" Compatible with this model's {head_key.replace('_', ' ')}={head_dim}." if isinstance(head_dim, int) and head_dim > 0 else ""
+        return f"{description} {model_description(profile.model)}{extra} Compatible options: {compat}."
     return description
 
 

@@ -217,7 +217,7 @@ def model_metadata(model: str) -> dict:
     ensure_meta_cache_loaded()
     path = model_path(model)
     cached = META_CACHE.get(model)
-    if cached and metadata_cache_valid(path, model):
+    if cached and metadata_cache_valid(path, model) and "key_length" in cached and "value_length" in cached:
         return cached
     meta = load_model_metadata(path)
     META_CACHE[model] = meta
@@ -234,6 +234,8 @@ def load_model_metadata(path: Path) -> dict:
         "parameter_count": None,
         "expert_count": None,
         "expert_used_count": None,
+        "key_length": None,
+        "value_length": None,
     }
     try:
         if str(GGUF_PY) not in sys.path:
@@ -257,6 +259,10 @@ def load_model_metadata(path: Path) -> dict:
                 meta["expert_count"] = int(val)
             elif key.endswith(".expert_used_count"):
                 meta["expert_used_count"] = int(val)
+            elif key.endswith(".attention.key_length"):
+                meta["key_length"] = int(val)
+            elif key.endswith(".attention.value_length"):
+                meta["value_length"] = int(val)
     except Exception as exc:
         meta["error"] = repr(exc)
     return meta
@@ -276,6 +282,16 @@ def model_description(model: str) -> str:
     return "; ".join(parts)
 
 
+CACHE_TYPE_OPTIONS = ["f32", "f16", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl", "turbo2", "turbo3", "turbo4", "turbo3_tcq", "turbo2_tcq", "unset"]
+CACHE_TYPE_BLOCK_SIZES = {
+    "turbo2": 32,
+    "turbo3": 32,
+    "turbo4": 128,
+    "turbo3_tcq": 128,
+    "turbo2_tcq": 128,
+}
+
+
 def gpu_layer_options(model: str) -> list[str]:
     n = model_metadata(model).get("block_count")
     if not isinstance(n, int) or n <= 0:
@@ -286,6 +302,35 @@ def gpu_layer_options(model: str) -> list[str]:
         if v not in vals:
             vals.append(v)
     return [str(v) for v in vals] + [",".join(str(v) for v in vals[:3]), "custom", "unset"]
+
+
+def compatible_cache_type_options(model: str, field: str) -> list[str]:
+    if field not in {"cache_type_k", "cache_type_v"}:
+        return PRESETS.get(field, [])
+    if not model:
+        return list(CACHE_TYPE_OPTIONS)
+    meta = model_metadata(model)
+    head_dim = meta.get("key_length" if field == "cache_type_k" else "value_length")
+    if not isinstance(head_dim, int) or head_dim <= 0:
+        return list(CACHE_TYPE_OPTIONS)
+    opts: list[str] = []
+    for opt in CACHE_TYPE_OPTIONS:
+        if opt == "unset":
+            continue
+        block_size = CACHE_TYPE_BLOCK_SIZES.get(opt)
+        if block_size is None or head_dim % block_size == 0:
+            opts.append(opt)
+    opts.append("unset")
+    return opts
+
+
+def cache_type_is_compatible(cache_type: str, head_dim: int | None) -> bool:
+    if not cache_type or cache_type == "unset":
+        return True
+    if not isinstance(head_dim, int) or head_dim <= 0:
+        return True
+    block_size = CACHE_TYPE_BLOCK_SIZES.get(cache_type)
+    return block_size is None or head_dim % block_size == 0
 
 
 def choose_default_model(models: list[str]) -> str:

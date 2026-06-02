@@ -9,9 +9,37 @@ CACHE_STRATEGIES = {
     "unset": ("", ""),
 }
 
+CACHE_TYPE_OPTIONS = ["f32", "f16", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl", "turbo2", "turbo3", "turbo4", "turbo3_tcq", "turbo2_tcq", "unset"]
+
+
+def normalize_cache_type(value: str) -> str:
+    value = value.strip()
+    if value.lower() in {"", "unset", "none", "default"}:
+        return ""
+    return value
+
+
+def resolve_cache_types(profile: "Profile") -> tuple[str, str]:
+    strategy_k, strategy_v = CACHE_STRATEGIES.get(profile.cache_strategy, CACHE_STRATEGIES["unset"])
+    cache_type_k = normalize_cache_type(profile.cache_type_k) or strategy_k
+    cache_type_v = normalize_cache_type(profile.cache_type_v) or strategy_v
+    return cache_type_k, cache_type_v
+
+
+def cache_types_text(profile: "Profile") -> str:
+    k, v = resolve_cache_types(profile)
+    return f"{k or 'unset'}/{v or 'unset'}"
+
+
+def apply_cache_strategy(profile: "Profile", cache_strategy: str) -> None:
+    profile.cache_strategy = cache_strategy
+    profile.cache_type_k, profile.cache_type_v = CACHE_STRATEGIES.get(cache_strategy, CACHE_STRATEGIES["unset"])
+
 FIELD_DESCRIPTIONS = {
     "model": "llama-bench -m/--model. GGUF model file discovered under ./models; bench source default is models/7B/ggml-model-q4_0.gguf but this TUI selects a local GGUF. Variant notes: choose a GGUF matching the scenario (quantized, MoE, MTP/REAP); no parameter conflict found in help/source. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
-    "cache_strategy": "Maps to llama-bench -ctk/--cache-type-k and -ctv/--cache-type-v. Bench default is f16/f16; TUI default turbo uses buun turbo4/turbo3. Variant notes: quantized KV (turbo/q8) can reduce memory but may affect quality/compat; use f16 when debugging MTP/REAP or unsupported cache types. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "cache_strategy": "Preset that maps to llama-bench -ctk/--cache-type-k and -ctv/--cache-type-v. The individual cache_type_k/cache_type_v fields override it when set. Bench default is f16/f16; TUI default turbo uses buun turbo4/turbo3. Variant notes: quantized KV (turbo/q8) can reduce memory but may affect quality/compat; use f16 when debugging MTP/REAP or unsupported cache types. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "cache_type_k": "llama-bench -ctk/--cache-type-k. Overrides the preset cache_strategy for K when set. Choose a type supported by the model's head dimension; turbo4 on some models (like GLM A3B with n_embd_head_k=576) can fail if block size does not divide the head size. Refs: llama-bench --help; llama-context.cpp; buun README recommendations.",
+    "cache_type_v": "llama-bench -ctv/--cache-type-v. Overrides the preset cache_strategy for V when set. Use this to mix K/V types independently for compatibility or memory tuning. Refs: llama-bench --help; llama-context.cpp; buun README recommendations.",
     "depths": "llama-bench -d/--n-depth. Default is 0. Prefills this many tokens before measuring; high depths stress KV memory. Variant notes: bad for low-memory quantized/MoE/MTP/REAP runs when combined with large batch/ubatch or f16 KV; reduce depth first on OOM. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
     "batch_size": "llama-bench -b/--batch-size. Default is 2048. Logical prompt-processing batch size. Larger improves prefill but increases memory/graph pressure. Variant notes: bad for long-context quantized/MoE/MTP/REAP if paired with high n-depth, high ubatch, f16 KV, or many GPU layers. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
     "ubatch_size": "llama-bench -ub/--ubatch-size. Default is 512. Physical micro-batch size. Lower reduces memory pressure; higher can improve throughput. Variant notes: for quantized/MoE/MTP/REAP, lower this before lowering batch_size when VRAM pressure or CUDA graph failures appear. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
@@ -36,6 +64,8 @@ PRESETS = {
     "gpu_layers": ["99", "80", "60", "99,80,60", "custom", "unset"],
     "prompt": ["0", "512", "0,512", "custom", "unset"],
     "gen": ["128", "32", "32,128", "custom", "unset"],
+    "cache_type_k": CACHE_TYPE_OPTIONS,
+    "cache_type_v": CACHE_TYPE_OPTIONS,
     "repetitions": ["1", "2", "3", "unset"],
     "warmup": ["false", "true", "unset"],
     "device": ["CUDA0", "auto", "unset"],
@@ -48,6 +78,8 @@ class Profile:
     name: str
     model: str = ""
     cache_strategy: str = "turbo"
+    cache_type_k: str = ""
+    cache_type_v: str = ""
     depths: str = "0,4096,8192,16384,32768"
     batch_size: str = "1024"
     ubatch_size: str = "256"
@@ -64,7 +96,7 @@ class Profile:
 
     def items(self) -> list[tuple[str, str]]:
         return [(key, getattr(self, key)) for key in [
-            "model", "cache_strategy", "depths", "batch_size", "ubatch_size",
+            "model", "cache_strategy", "cache_type_k", "cache_type_v", "depths", "batch_size", "ubatch_size",
             "threads", "n_cpu_moe", "gpu_layers", "prompt", "gen", "repetitions",
             "warmup", "device", "flash_attn", "no_mmap",
         ]]

@@ -9,18 +9,28 @@ from pathlib import Path
 
 from .models import gguf_value, model_path
 from .paths import GGUF_PY
-from .profile import Profile
+from .profile import Profile, resolve_cache_types
 
 MIB = 1024 * 1024
 GIB = 1024 * MIB
 
-# Approximate bytes per KV element. Turbo values are bit-width based; q8_0 is
-# rounded up for quantization block metadata.
-KV_BYTES_BY_STRATEGY = {
-    "turbo": (0.50, 0.375),
-    "q8": (1.125, 1.125),
-    "f16": (2.0, 2.0),
-    "unset": (2.0, 2.0),
+# Approximate bytes per KV element.
+KV_BYTES_BY_TYPE = {
+    "f32": 4.0,
+    "f16": 2.0,
+    "bf16": 2.0,
+    "q8_0": 1.125,
+    "q5_0": 0.6875,
+    "q5_1": 0.6875,
+    "q4_0": 0.5,
+    "q4_1": 0.625,
+    "iq4_nl": 0.5625,
+    "turbo4": 0.53125,
+    "turbo3": 0.40625,
+    "turbo3_tcq": 0.40625,
+    "turbo2": 0.28125,
+    "turbo2_tcq": 0.28125,
+    "": 2.0,
 }
 
 EXPERT_TENSOR_MARKERS = ("_exps", "_shexp", ".expert", "expert_")
@@ -271,7 +281,9 @@ def runtime_budget(
     vram_budget_bytes: int | None = None,
 ) -> RuntimeBudget:
     desired_context = desired_context_override if desired_context_override and desired_context_override > 0 else desired_context_size(profile, sizing)
-    k_bytes, v_bytes = KV_BYTES_BY_STRATEGY.get(profile.cache_strategy, KV_BYTES_BY_STRATEGY["unset"])
+    cache_type_k, cache_type_v = resolve_cache_types(profile)
+    k_bytes = KV_BYTES_BY_TYPE.get(cache_type_k, 2.0)
+    v_bytes = KV_BYTES_BY_TYPE.get(cache_type_v, 2.0)
     key_len = sizing.key_length or infer_length_from_embedding(sizing)
     value_len = sizing.value_length or infer_length_from_embedding(sizing)
     kv_per_layer = int(desired_context * (key_len * k_bytes + value_len * v_bytes))
