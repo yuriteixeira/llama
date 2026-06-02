@@ -42,7 +42,7 @@ from .models import (
     model_path,
 )
 from .offload import OffloadError, calculate_offload, format_bytes
-from .process_stream import StreamStatus
+from .process_stream import StreamStatus, run_streaming_process
 from .repair import diagnose_failure, next_repair_step
 from .paths import CONFIG_DIR, ROOT
 from .profile import BenchConfig, CACHE_STRATEGIES, FIELD_DESCRIPTIONS, PRESETS, Profile, apply_cache_strategy, cache_types_text, resolve_cache_types
@@ -241,10 +241,11 @@ def research_best_known_action(stdscr) -> None:
     run_best_known_research_with_popup(stdscr)
 
 
-def update_model_presets_action(stdscr) -> None:
+def update_model_presets_action(stdscr, initial_lines: list[str] | None = None) -> None:
     script = ROOT / "scripts" / "update-buun-model-presets.py"
     cmd = [sys.executable, str(script)]
-    output_lines = [f"Updating model presets from best benchmark results..."]
+    output_lines = list(initial_lines or [])
+    output_lines.append("Updating model presets from best benchmark results...")
     stdscr.nodelay(True)
     try:
         def on_output(chunk: str) -> None:
@@ -525,6 +526,7 @@ def wrap_lines_for_screen(lines: list[str], width: int) -> list[str]:
 
 
 PROFILE_ACTIONS = {
+    "__save_update_presets": "Save config & update presets",
     "__run_this_profile": "Save config and run this profile only",
     "__clear_model": "Delete model from profile/caches/presets",
     "__load_best_known": "Load best-known params for this model",
@@ -644,6 +646,10 @@ def selected_field_lines(profile: Profile, field: str, width: int) -> list[str]:
 
 
 def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
+    if field == "__save_update_presets":
+        lines = ["Save config & update presets", ""]
+        lines.extend(wrap_text("Saves the current benchmark config, then refreshes versions/buun/model-presets.ini from the best recorded benchmark results.", width))
+        return lines
     if field == "__run_this_profile":
         lines = ["Save config and run this profile only", ""]
         lines.extend(wrap_text(f"Saves the current config with run_profiles={profile.name} and starts a benchmark run immediately after leaving the profile editor.", width))
@@ -686,6 +692,9 @@ def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
 
 
 def handle_profile_editor_selection(stdscr, cfg: BenchConfig, profile: Profile, field: str, models: list[str], other_profile: Profile | None = None) -> Path | bool:
+    if field == "__save_update_presets":
+        save_update_presets_action(stdscr, cfg)
+        return False
     if field == "__run_this_profile":
         return save_run_single_profile_action(stdscr, cfg, profile)
     if field == "__clear_model":
@@ -708,6 +717,12 @@ def handle_profile_editor_selection(stdscr, cfg: BenchConfig, profile: Profile, 
         return False
     edit_profile_field(stdscr, profile, field, models)
     return False
+
+
+def save_update_presets_action(stdscr, cfg: BenchConfig) -> None:
+    path = CONFIG_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{slugify(cfg.run_prefix)}.ini"
+    save_config(cfg, path)
+    update_model_presets_action(stdscr, initial_lines=[f"Saved config: {path}", ""])
 
 
 def save_run_single_profile_action(stdscr, cfg: BenchConfig, profile: Profile) -> Path | bool:

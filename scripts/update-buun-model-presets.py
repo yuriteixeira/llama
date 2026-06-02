@@ -20,7 +20,7 @@ FIXED_ARGS_PATH = ROOT / "versions" / "buun" / "model-preset-fixed-args.txt"
 RANK_SCRIPT = ROOT / "scripts" / "rank-buun-results.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
-from bench_buun_tui.models import find_models, model_label, model_path  # noqa: E402
+from bench_buun_tui.models import find_models, model_label, model_metadata, model_path, model_type_parts  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,7 @@ class PresetRow:
     pp_tps: float | None
     tg_tps: float | None
     sample_count: int | None
+    is_mtp: bool
 
 
 def main() -> int:
@@ -58,6 +59,10 @@ def main() -> int:
     parser.add_argument("--fixed-arg", action="append", default=[], help="additional llama-server arg snippet to include in every preset; may be repeated")
     parser.add_argument("--dry-run", action="store_true", help="print the generated preset without writing it")
     args = parser.parse_args()
+
+    if not args.dry_run:
+        for message in remove_deleted_model_presets(args.preset):
+            print(message)
 
     ranking = load_rank_module()
     summaries = ranking.discover_summary_files(args.input.resolve(), args.include_test_runs, args.latest_only)
@@ -77,8 +82,9 @@ def main() -> int:
     preset_rows: list[PresetRow] = []
     used_sections: set[str] = {"default"}
     warnings: list[str] = []
+    missing_model_names: set[str] = set()
     for agg in aggregates:
-        resolved_model = resolve_model(str(agg.model_path or ""), str(agg.model or ""), warnings)
+        resolved_model = resolve_model(str(agg.model_path or ""), str(agg.model or ""), warnings, missing_model_names)
         if not resolved_model:
             continue
         section = unique_section_name(slugify(Path(resolved_model).stem), used_sections)
@@ -108,8 +114,13 @@ def main() -> int:
                 pp_tps=pp_tps,
                 tg_tps=tg_tps,
                 sample_count=agg.sample_count,
+                is_mtp=is_mtp_model(resolved_model),
             )
         )
+
+    if missing_model_names and not args.dry_run:
+        for message in remove_named_model_presets(args.preset, missing_model_names):
+            print(message)
 
     if not preset_rows:
         print("No ranked rows could be resolved to local model files.", file=sys.stderr)
@@ -139,7 +150,7 @@ def load_rank_module() -> Any:
     return module
 
 
-def resolve_model(model_value: str, display_value: str, warnings: list[str]) -> str:
+def resolve_model(model_value: str, display_value: str, warnings: list[str], missing_model_names: set[str]) -> str:
     for candidate in [model_value.strip(), display_value.strip()]:
         if not candidate:
             continue
@@ -149,16 +160,80 @@ def resolve_model(model_value: str, display_value: str, warnings: list[str]) -> 
 
     display_name = display_value.split(" [", 1)[0].strip()
     if not display_name:
-        warnings.append(f"skipping unresolved model row: {display_value or model_value}")
+        basename = Path(model_value).name
+        if basename:
+            missing_model_names.add(basename)
         return ""
-    matches = [m for m in find_models() if Path(m).name == display_name]
+    matches = [m for m in find_models() if Path(m).name == display_name and model_path(m).exists()]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         warnings.append(f"skipping ambiguous model name {display_name!r}: {', '.join(matches)}")
     else:
-        warnings.append(f"skipping missing model {display_name!r}")
+        missing_model_names.add(display_name)
     return ""
+
+
+def remove_deleted_model_presets(path: Path) -> list[str]:
+    return remove_preset_sections(path, lambda model: bool(model) and not model_path(model).exists(), "deleted-model")
+
+
+def remove_named_model_presets(path: Path, model_names: set[str]) -> list[str]:
+    names = {name.strip() for name in model_names if name and name.strip()}
+    if not names:
+        return []
+    basenames = {Path(name).name for name in names}
+    return remove_preset_sections(path, lambda model: Path(model).name in basenames, "missing-result-model")
+
+
+def remove_preset_sections(path: Path, should_remove_model, reason: str) -> list[str]:
+    if not path.exists():
+        return []
+    lines = path.read_text().splitlines()
+    output: list[str] = []
+    removed_sections: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if is_ini_section_header(line):
+            flush_existing_preset_section(current, output, removed_sections, should_remove_model)
+            current = [line]
+        elif current:
+            current.append(line)
+        else:
+            output.append(line)
+    flush_existing_preset_section(current, output, removed_sections, should_remove_model)
+    if not removed_sections:
+        return []
+    path.write_text("\n".join(output).rstrip() + "\n")
+    names = ", ".join(removed_sections)
+    return [f"Removed {len(removed_sections)} {reason} preset section{'s' if len(removed_sections) != 1 else ''} from {path}: {names}."]
+
+
+def flush_existing_preset_section(section_lines: list[str], output: list[str], removed_sections: list[str], should_remove_model) -> None:
+    if not section_lines:
+        return
+    section_name = section_lines[0].strip()[1:-1].strip()
+    section_model = preset_section_model(section_lines)
+    if should_remove_model(section_model):
+        removed_sections.append(section_name)
+        return
+    output.extend(section_lines)
+
+
+def preset_section_model(section_lines: list[str]) -> str:
+    for line in section_lines[1:]:
+        match = re.match(r"^\s*model\s*=\s*(.*?)\s*$", line)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def is_ini_section_header(line: str) -> bool:
+    return bool(re.match(r"^\s*\[[^\]]+\]\s*$", line))
+
+
+def is_mtp_model(model: str) -> bool:
+    return "MTP" in model_type_parts(model, model_metadata(model))
 
 
 def render_presets(rows: list[PresetRow], fixed_params: list[tuple[str, str]]) -> str:
@@ -203,10 +278,13 @@ def render_section(name: str, row: PresetRow, fixed_params: list[tuple[str, str]
         ("device", "CUDA0"),
         ("parallel", "1"),
         ("flash-attn", "on" if row.flash_attn == "on" else "off"),
-        ("cache-ram", "0"),
-        ("no-cache-idle-slots", "true"),
         ("no-mmproj", "true"),
     ])
+    if row.is_mtp:
+        params.extend([
+            ("spec-type", "draft-mtp"),
+            ("spec-draft-n-max", "2"),
+        ])
     params = merge_params(params, fixed_params)
     params = merge_params(params, [("load-on-startup", "true" if load_on_startup else "false"), ("stop-timeout", "10")])
 

@@ -6,4 +6,5 @@
 #   --cache-reuse 256
 #
 # Keep reasoning explicit here instead of hard-coded in the generator.
---reasoning off
+--reasoning on \
+--cache-reuse 256
