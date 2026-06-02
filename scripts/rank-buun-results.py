@@ -477,29 +477,61 @@ def max_depth_for_config(samples: list[Sample], config_key: str) -> int:
 def llama_server_command(winner: ConfigAggregate, ctx_size: int) -> str:
     cmd = [
         "llama-server",
-        "--host", "0.0.0.0",
-        "--port", "8080",
-        "--model", quote_shell(winner.model_path),
-        "--ctx-size", str(ctx_size or 262144),
+        "--host 0.0.0.0",
+        "--port 8080",
+        f"--model {quote_shell(winner.model_path)}",
+        f"--ctx-size {ctx_size or 262144}",
     ]
     if winner.type_k:
-        cmd.extend(["--cache-type-k", quote_shell(winner.type_k)])
+        cmd.append(f"--cache-type-k {quote_shell(winner.type_k)}")
     if winner.type_v:
-        cmd.extend(["--cache-type-v", quote_shell(winner.type_v)])
+        cmd.append(f"--cache-type-v {quote_shell(winner.type_v)}")
     if winner.n_threads is not None:
-        cmd.extend(["--threads", str(winner.n_threads), "--threads-batch", str(winner.n_threads)])
+        cmd.append(f"--threads {winner.n_threads}")
+        cmd.append(f"--threads-batch {winner.n_threads}")
     if winner.n_batch is not None:
-        cmd.extend(["--batch-size", str(winner.n_batch)])
+        cmd.append(f"--batch-size {winner.n_batch}")
     if winner.n_ubatch is not None:
-        cmd.extend(["--ubatch-size", str(winner.n_ubatch)])
+        cmd.append(f"--ubatch-size {winner.n_ubatch}")
     if winner.n_cpu_moe is not None:
-        cmd.extend(["--n-cpu-moe", str(winner.n_cpu_moe)])
+        cmd.append(f"--n-cpu-moe {winner.n_cpu_moe}")
     if winner.n_gpu_layers is not None:
-        cmd.extend(["--n-gpu-layers", str(winner.n_gpu_layers)])
+        cmd.append(f"--n-gpu-layers {winner.n_gpu_layers}")
     if winner.flash_attn:
-        cmd.extend(["--flash-attn", "on" if normalize_bool_text(winner.flash_attn) == "on" else "off"])
-    cmd.extend(["--parallel", "1", "--metrics", "--reasoning", "off", "--no-mmproj"])
-    return " ".join(cmd)
+        cmd.append(f"--flash-attn {'on' if normalize_bool_text(winner.flash_attn) == 'on' else 'off'}")
+    cmd.extend(["--parallel 1", "--metrics", "--reasoning off", "--no-mmproj"])
+    separator = " \\" + "\n  "
+    return separator.join(cmd)
+
+
+def llama_server_command_for_sample(sample: Sample) -> str:
+    cmd = [
+        "llama-server",
+        "--host 0.0.0.0",
+        "--port 8080",
+        f"--model {quote_shell(sample.model_path)}",
+        f"--ctx-size {sample.depth or 262144}",
+    ]
+    if sample.type_k:
+        cmd.append(f"--cache-type-k {quote_shell(sample.type_k)}")
+    if sample.type_v:
+        cmd.append(f"--cache-type-v {quote_shell(sample.type_v)}")
+    if sample.n_threads is not None:
+        cmd.append(f"--threads {sample.n_threads}")
+        cmd.append(f"--threads-batch {sample.n_threads}")
+    if sample.n_batch is not None:
+        cmd.append(f"--batch-size {sample.n_batch}")
+    if sample.n_ubatch is not None:
+        cmd.append(f"--ubatch-size {sample.n_ubatch}")
+    if sample.n_cpu_moe is not None:
+        cmd.append(f"--n-cpu-moe {sample.n_cpu_moe}")
+    if sample.n_gpu_layers is not None:
+        cmd.append(f"--n-gpu-layers {sample.n_gpu_layers}")
+    if sample.flash_attn:
+        cmd.append(f"--flash-attn {'on' if normalize_bool_text(sample.flash_attn) == 'on' else 'off'}")
+    cmd.extend(["--parallel 1", "--metrics", "--reasoning off", "--no-mmproj"])
+    separator = " \\" + "\n  "
+    return separator.join(cmd)
 
 
 def format_config_inline(agg: ConfigAggregate) -> str:
@@ -600,11 +632,17 @@ def render_html(
     md_path: Path,
     message: str | None = None,
 ) -> str:
+    class RawHTML(str):
+        pass
+
     def esc(value: Any) -> str:
-        return html.escape("" if value is None else str(value))
+        return html.escape("" if value is None else str(value), quote=True)
 
     def row(cells: list[Any]) -> str:
-        return "<tr>" + "".join(f"<td>{esc(cell)}</td>" for cell in cells) + "</tr>"
+        def render_cell(value: Any) -> str:
+            return str(value) if isinstance(value, RawHTML) else esc(value)
+
+        return "<tr>" + "".join(f"<td>{render_cell(cell)}</td>" for cell in cells) + "</tr>"
 
     def table(headers: list[str], rows: list[list[Any]]) -> str:
         return (
@@ -616,13 +654,22 @@ def render_html(
             + "</tbody></table>"
         )
 
+    def model_cell(sample: Sample) -> RawHTML:
+        label = Path(sample.model_path).name or sample.model
+        command = llama_server_command_for_sample(sample)
+        return RawHTML(
+            f"<span>{esc(label)}</span> "
+            f"<button type='button' class='copy-cmd' data-cmd='{esc(command)}' onclick='copyCmd(this)'>copy llama-server cmd</button>"
+        )
+
     links = f"<a href='{esc(csv_path.name)}'>ranking.csv</a> · <a href='{esc(md_path.name)}'>ranking.md</a>"
     overall_block = ""
     if overall:
         winner = overall[0]
         command = llama_server_command(winner, max_depth_for_config(paired_samples, winner.config_key))
         overall_block = (
-            f"<p><b>Model:</b> <code>{esc(Path(winner.model_path).name or winner.model)}</code></p>"
+            f"<p><b>Model:</b> <code>{esc(Path(winner.model_path).name or winner.model)}</code> "
+            f"<button type='button' class='copy-cmd' data-cmd='{esc(command)}' onclick='copyCmd(this)'>copy llama-server cmd</button></p>"
             f"<p><b>Config:</b> <code>{esc(format_config_inline(winner))}</code></p>"
             f"<p><b>Median PP TPS:</b> <code>{esc(fmt_num(median(winner.pp_values)))}</code> "
             f"<b>Median TG TPS:</b> <code>{esc(fmt_num(median(winner.tg_values)))}</code> "
@@ -633,9 +680,9 @@ def render_html(
     else:
         overall_block = "<p>No overall winner found.</p>"
 
-    depth_rows = [[depth, 1, Path(sample.model_path).name or sample.model, fmt_num(sample.pp_tps), fmt_num(sample.tg_tps), fmt_num(sample.score), sample.run_dir, sample.profile] for depth, sample in sorted(depth_best.items())]
-    pp_rows = [[depth, Path(sample.model_path).name or sample.model, fmt_num(sample.pp_tps), sample.run_dir, sample.profile] for depth, sample in sorted(pp_best.items())]
-    tg_rows = [[depth, Path(sample.model_path).name or sample.model, fmt_num(sample.tg_tps), sample.run_dir, sample.profile] for depth, sample in sorted(tg_best.items())]
+    depth_rows = [[depth, 1, model_cell(sample), fmt_num(sample.pp_tps), fmt_num(sample.tg_tps), fmt_num(sample.score), sample.run_dir, sample.profile] for depth, sample in sorted(depth_best.items())]
+    pp_rows = [[depth, model_cell(sample), fmt_num(sample.pp_tps), sample.run_dir, sample.profile] for depth, sample in sorted(pp_best.items())]
+    tg_rows = [[depth, model_cell(sample), fmt_num(sample.tg_tps), sample.run_dir, sample.profile] for depth, sample in sorted(tg_best.items())]
 
     body = [
         "<!doctype html>",
@@ -650,7 +697,11 @@ def render_html(
         "pre{white-space:pre-wrap;background:#fafafa;border:1px solid #ddd;padding:12px;overflow:auto}",
         "code{background:#f5f5f5;padding:0 3px;border-radius:3px}",
         ".muted{color:#666}",
-        "</style></head><body>",
+        ".copy-cmd{margin-left:8px;padding:2px 6px;font-size:12px;cursor:pointer}",
+        "</style>",
+        "<script>",
+        "async function copyCmd(button){const cmd=button?.dataset?.cmd||'';const done=()=>{const old=button.textContent;button.textContent='copied';setTimeout(()=>button.textContent=old,1200);};try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(cmd);done();return;}const ta=document.createElement('textarea');ta.value=cmd;ta.style.position='fixed';ta.style.opacity='0';ta.style.left='-9999px';document.body.appendChild(ta);ta.focus();ta.select();const ok=document.execCommand('copy');ta.remove();if(ok){done();return;}throw new Error('execCommand returned false');}catch(err){console.error('clipboard copy failed', err);button.textContent='copy failed';setTimeout(()=>button.textContent='copy llama-server cmd',1200);}}",
+        "</script></head><body>",
         "<h1>Buun Benchmark Ranking</h1>",
         f"<p class='muted'>Input: <code>{esc(input_dir)}</code> · Paired samples: <code>{len(paired_samples)}</code> · Score: <code>{esc(args.score)}</code> · {links}</p>",
     ]
