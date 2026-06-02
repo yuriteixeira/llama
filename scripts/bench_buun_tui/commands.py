@@ -23,6 +23,10 @@ def flash_attn_server_value(value: str) -> str:
     return "on" if truthy(value) else "off"
 
 
+def bool_flag_value(value: str) -> str:
+    return "1" if truthy(value) else "0"
+
+
 def profile_server_command(profile: Profile) -> list[str]:
     ctk, ctv = CACHE_STRATEGIES.get(profile.cache_strategy, CACHE_STRATEGIES["turbo"])
     model_path = Path(profile.model)
@@ -93,7 +97,8 @@ def profile_command(profile: Profile, raw_path: Path) -> list[str]:
     if is_set(ctv):
         cmd.extend(["--cache-type-v", ctv])
     add_arg(cmd, "--device", profile.device)
-    add_arg(cmd, "--flash-attn", profile.flash_attn)
+    if is_set(profile.flash_attn):
+        cmd.extend(["--flash-attn", bool_flag_value(profile.flash_attn)])
     if is_set(profile.no_mmap) and truthy(profile.no_mmap):
         cmd.extend(["--mmap", "0"])
     add_arg(cmd, "--repetitions", profile.repetitions)
