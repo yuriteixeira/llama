@@ -970,6 +970,10 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
     stdscr.nodelay(True)
     try:
         while True:
+            # show_scroll_text() switches back to blocking input; each retry must
+            # restore non-blocking mode or popup_cancel_requested() can block the
+            # next smoke-test process before any output is drawn.
+            stdscr.nodelay(True)
             output_lines = [f"Starting smoke test for {model_label(profile.model)}"]
 
             def on_output(chunk: str) -> None:
@@ -997,8 +1001,8 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
                     cmd_text,
                     "\n".join(output_tail),
                 )
-                if result.timed_out or result.idle_timed_out or result.cancelled:
-                    reason = result.reason or ("cancelled" if result.cancelled else "timed out")
+                if result.cancelled:
+                    reason = result.reason or "cancelled"
                     lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Reason: {reason}"]
                     metric_lines = smoke_test_metric_lines(result)
                     if metric_lines:
@@ -1009,6 +1013,8 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
                     show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
                     return False
             lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Diagnosis: {diagnosis}"]
+            if result.reason:
+                lines.append(f"Reason: {result.reason}")
             metric_lines = smoke_test_metric_lines(result)
             if metric_lines:
                 lines.extend(["", *metric_lines])
