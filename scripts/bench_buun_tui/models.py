@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
 import sys
@@ -152,20 +153,93 @@ def model_selector_label(model: str) -> str:
     if not model:
         return "No model selected"
     p = model_path(model)
-    return f"{Path(model).name} ({human_size(p)})"
+    status = "★ UNTESTED • " if not model_has_bench_results(model) else ""
+    return f"{status}{Path(model).name} ({human_size(p)})"
 
 
 def model_options(models: list[str]) -> tuple[list[str], dict[str, str]]:
     mapping: dict[str, str] = {}
     options: list[str] = []
-    for model in models:
+    ordered_models = prominent_model_order(models)
+    for model in ordered_models:
         label = model_selector_label(model)
         if label in mapping:
-            label = f"{model} ({human_size(model_path(model))})"
+            label = f"{'★ UNTESTED • ' if not model_has_bench_results(model) else ''}{model} ({human_size(model_path(model))})"
         mapping[label] = model
         options.append(label)
     return options, mapping
 
+
+def prominent_model_order(models: list[str]) -> list[str]:
+    """Keep untested models at the top while preserving scan order inside each group."""
+    return [m for m in models if not model_has_bench_results(m)] + [m for m in models if model_has_bench_results(m)]
+
+
+def model_has_bench_results(model: str) -> bool:
+    if not model:
+        return True
+    return bool(model_identities(model) & tested_model_identities())
+
+
+def model_identities(model: str) -> set[str]:
+    identities = {str(model)}
+    path = model_path(model)
+    identities.add(str(path))
+    identities.add(rel(path))
+    try:
+        identities.add(str(path.resolve()))
+        identities.add(rel(path.resolve()))
+    except OSError:
+        pass
+    return {item for item in identities if item}
+
+
+TESTED_MODELS_CACHE: set[str] | None = None
+
+
+def tested_model_identities() -> set[str]:
+    global TESTED_MODELS_CACHE
+    if TESTED_MODELS_CACHE is None:
+        TESTED_MODELS_CACHE = scan_tested_model_identities()
+    return TESTED_MODELS_CACHE
+
+
+def scan_tested_model_identities() -> set[str]:
+    identities: set[str] = set()
+    if not RESULT_DIR.exists():
+        return identities
+    for path in RESULT_DIR.glob("**/profile_*.jsonl"):
+        identities.update(model_identities_from_jsonl(path))
+    for path in RESULT_DIR.glob("**/summary.csv"):
+        identities.update(model_identities_from_summary(path))
+    return identities
+
+
+def model_identities_from_jsonl(path: Path) -> set[str]:
+    try:
+        with path.open() as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                model = str(row.get("model_path") or row.get("model_filename") or row.get("model") or "").strip()
+                return model_identities(model) if model else set()
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return set()
+
+
+def model_identities_from_summary(path: Path) -> set[str]:
+    identities: set[str] = set()
+    try:
+        with path.open(newline="") as f:
+            for row in csv.DictReader(f):
+                model = str(row.get("model_path") or row.get("model_filename") or "").strip()
+                if model:
+                    identities.update(model_identities(model))
+    except OSError:
+        return set()
+    return identities
 
 
 def gguf_value(value):
