@@ -1021,19 +1021,30 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
             metric_lines = smoke_test_metric_lines(result)
             if metric_lines:
                 lines.extend(["", *metric_lines])
-            lines.extend(["", "Output:"])
-            if output_tail:
-                lines.extend(output_tail)
             if result.passed:
-                lines.extend(["", "Smoke test passed."])
+                lines.extend(["", "Smoke test passed.", "", "Output:"])
+                if output_tail:
+                    lines.extend(output_tail)
                 show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
                 return True
             lines.extend(["", f"Smoke test failed ({diagnosis})."])
             step = next_repair_step(profile, smoke_test_block_count(profile), smoke_test_supports_moe(profile), diagnosis, tried)
             if step is None:
+                lines.extend(["", "Output:"])
+                if output_tail:
+                    lines.extend(output_tail)
                 show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
                 return False
-            lines.extend(["", f"Next repair step: {step.label}", "Repair changes (highlighted):", *change_lines([("gpu_layers", profile.gpu_layers, step.gpu_layers), ("n_cpu_moe", profile.n_cpu_moe, step.n_cpu_moe)])])
+            lines.extend([
+                "",
+                f"Next repair step: {step.label}",
+                "Repair changes (highlighted):",
+                *change_lines([("gpu_layers", profile.gpu_layers, step.gpu_layers), ("n_cpu_moe", profile.n_cpu_moe, step.n_cpu_moe)]),
+                "",
+                "Output:",
+            ])
+            if output_tail:
+                lines.extend(output_tail)
             if not show_scroll_text(stdscr, "Smoke test result", lines, accept_text="Enter apply repair  •  q/Esc stop", enter_accepts=False):
                 return False
             tried.add((profile.gpu_layers, profile.n_cpu_moe))
