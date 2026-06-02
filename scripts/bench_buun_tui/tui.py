@@ -213,8 +213,8 @@ def append_output_lines(lines: list[str], chunk: str) -> None:
 def draw_output_popup(stdscr, title: str, lines: list[str], footer: str) -> None:
     stdscr.clear()
     rows, cols = screen_size()
-    height = max(8, min(rows - 2, rows * 3 // 4))
-    width = max(40, min(cols - 4, cols * 4 // 5))
+    height = max(3, min(max(3, rows - 2), max(3, rows * 3 // 4)))
+    width = max(10, min(max(10, cols - 4), max(10, cols * 4 // 5)))
     top = max(0, (rows - height) // 2)
     left = max(0, (cols - width) // 2)
     win = curses.newwin(height, width, top, left)
@@ -696,39 +696,39 @@ class Panel:
 
 def main_menu_layout() -> dict[str, Panel]:
     rows, cols = screen_size()
-    header = Panel(0, 0, 5, cols)
-    help_panel = Panel(max(0, rows - 3), 0, 3, cols)
-    body_height = max(3, rows - header.height - help_panel.height)
-    left_width = max(28, min(38, cols // 3))
+    header = Panel(0, 0, min(5, max(3, rows - 5)), cols)
+    help_panel = Panel(max(0, rows - 3), 0, min(3, rows), cols)
+    body_height = max(1, rows - header.height - help_panel.height)
+    left_width = responsive_split_width(cols, preferred_min=28, preferred_max=38)
     return {
         "header": header,
         "actions": Panel(header.height, 0, body_height, left_width),
-        "profiles": Panel(header.height, left_width, body_height, cols - left_width),
+        "profiles": Panel(header.height, left_width, body_height, max(1, cols - left_width)),
         "help": help_panel,
     }
 
 
 def profile_editor_layout() -> dict[str, Panel]:
     rows, cols = screen_size()
-    header = Panel(0, 0, 4, cols)
-    help_panel = Panel(max(0, rows - 3), 0, 3, cols)
-    body_height = max(3, rows - header.height - help_panel.height)
-    left_width = max(36, min(56, cols // 2))
+    header = Panel(0, 0, min(4, max(3, rows - 5)), cols)
+    help_panel = Panel(max(0, rows - 3), 0, min(3, rows), cols)
+    body_height = max(1, rows - header.height - help_panel.height)
+    left_width = responsive_split_width(cols, preferred_min=36, preferred_max=56)
     return {
         "header": header,
         "fields": Panel(header.height, 0, body_height, left_width),
-        "details": Panel(header.height, left_width, body_height, cols - left_width),
+        "details": Panel(header.height, left_width, body_height, max(1, cols - left_width)),
         "help": help_panel,
     }
 
 
 def choice_layout() -> dict[str, Panel]:
     rows, cols = screen_size()
-    title = Panel(0, 0, 3, cols)
-    desc_height = min(9, max(4, rows // 4))
-    help_panel = Panel(max(0, rows - 3), 0, 3, cols)
+    title = Panel(0, 0, min(3, rows), cols)
+    desc_height = min(9, max(2, rows // 4), max(1, rows - 6))
+    help_panel = Panel(max(0, rows - 3), 0, min(3, rows), cols)
     options_row = title.height + desc_height
-    options_height = max(3, rows - options_row - help_panel.height)
+    options_height = max(1, rows - options_row - help_panel.height)
     return {
         "title": title,
         "description": Panel(title.height, 0, desc_height, cols),
@@ -739,10 +739,10 @@ def choice_layout() -> dict[str, Panel]:
 
 def text_prompt_layout() -> dict[str, Panel]:
     rows, cols = screen_size()
-    title = Panel(0, 0, 3, cols)
-    desc_height = min(9, max(4, rows // 4))
-    input_panel = Panel(title.height + desc_height, 0, 3, cols)
-    help_panel = Panel(max(input_panel.row + input_panel.height, rows - 3), 0, 3, cols)
+    title = Panel(0, 0, min(3, rows), cols)
+    desc_height = min(9, max(2, rows // 4), max(1, rows - 9))
+    input_panel = Panel(title.height + desc_height, 0, min(3, max(1, rows - title.height - desc_height)), cols)
+    help_panel = Panel(max(input_panel.row + input_panel.height, rows - 3), 0, min(3, rows), cols)
     return {
         "title": title,
         "description": Panel(title.height, 0, desc_height, cols),
@@ -751,10 +751,21 @@ def text_prompt_layout() -> dict[str, Panel]:
     }
 
 
+def responsive_split_width(cols: int, preferred_min: int, preferred_max: int) -> int:
+    if cols <= 2:
+        return 1
+    if cols < preferred_min * 2:
+        return max(1, cols // 2)
+    return min(preferred_max, max(preferred_min, cols // 3), max(1, cols - preferred_min))
+
+
 def screen_size() -> tuple[int, int]:
+    # Keep curses dimensions current after terminal/tmux pane resizes.
+    if hasattr(curses, "update_lines_cols"):
+        curses.update_lines_cols()
     # Keep one column unused. Many curses terminals raise or clip when writing
     # into the final screen column, which would hide the right panel border.
-    return max(10, curses.LINES), max(1, curses.COLS - 1)
+    return max(5, curses.LINES), max(1, curses.COLS - 1)
 
 
 def draw_panel(stdscr, panel: Panel, title: str = "") -> None:
