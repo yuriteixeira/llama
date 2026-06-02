@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import copy
 import curses
+import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .best_known import (
+    BEST_KNOWN_PARAMS,
+    apply_recommendation,
+    build_apply_plan,
+    find_recommendations,
+    generate_best_known_params,
+)
+from .commands import profile_server_command
 from .config_store import find_saved_configs, load_config, remember_config, save_config, slugify
 from .models import (
     choose_default_model,
@@ -41,6 +50,7 @@ class TuiState:
         self.selected = 0
         self.actions = [
             "Load saved config",
+            "Scan models and research best-known params",
             "Edit run prefix",
             "Edit profile_a",
             "Edit profile_b",
@@ -82,7 +92,7 @@ def draw_actions_panel(stdscr, panel: "Panel", actions: list[str], selected: int
         attr = curses.A_REVERSE if i == selected else curses.A_NORMAL
         write_in_panel(stdscr, panel, row, f"> {action}" if i == selected else f"  {action}", attr)
         row += 1
-        if i in {1, 3} and row < panel.inner_height:
+        if i in {1, 4} and row < panel.inner_height:
             write_action_separator(stdscr, panel, row)
             row += 1
 
@@ -138,14 +148,34 @@ def handle_main_action(stdscr, state: TuiState):
     if selected == 0:
         load_saved_config_action(stdscr, state)
     elif selected == 1:
+        research_best_known_action(stdscr)
+    elif selected == 2:
         edit_run_prefix_action(stdscr, state)
-    elif selected in (2, 3):
-        edit_profile(stdscr, state.cfg.profiles[selected - 2], state.models)
-    elif selected in (4, 5):
-        return save_config_action(stdscr, state.cfg, run_after_save=selected == 5)
-    elif selected == 6:
+    elif selected in (3, 4):
+        edit_profile(stdscr, state.cfg.profiles[selected - 3], state.models)
+    elif selected in (5, 6):
+        return save_config_action(stdscr, state.cfg, run_after_save=selected == 6)
+    elif selected == 7:
         return None
     return False
+
+
+def research_best_known_action(stdscr) -> None:
+    show_status(stdscr, "Researching best-known params with pi -p...", "This may take a while. The TUI will continue when pi finishes.")
+    try:
+        path = generate_best_known_params()
+    except Exception as exc:
+        show_message(stdscr, f"Failed to generate best-known params: {exc}")
+        return
+    show_message(stdscr, f"Saved best-known params: {path}")
+
+
+def show_status(stdscr, title: str, detail: str = "") -> None:
+    stdscr.clear()
+    stdscr.addstr(0, 0, title[: curses.COLS - 1])
+    if detail:
+        stdscr.addstr(2, 0, detail[: curses.COLS - 1])
+    stdscr.refresh()
 
 
 def load_saved_config_action(stdscr, state: TuiState) -> None:
@@ -192,8 +222,51 @@ def show_message(stdscr, message: str) -> None:
     stdscr.getch()
 
 
+def show_scroll_text(stdscr, title: str, lines: list[str], accept_text: str, enter_accepts: bool = False) -> bool:
+    top = 0
+    while True:
+        stdscr.clear()
+        rows, cols = screen_size()
+        body_height = max(1, rows - 4)
+        safe_addstr(stdscr, 0, 0, title[: cols - 1], curses.A_BOLD)
+        visible_lines = wrap_lines_for_screen(lines, cols - 1)
+        top = max(0, min(top, max(0, len(visible_lines) - body_height)))
+        for row, line in enumerate(visible_lines[top : top + body_height], start=1):
+            safe_addstr(stdscr, row, 0, line)
+        safe_addstr(stdscr, rows - 2, 0, accept_text[: cols - 1])
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord("k")):
+            top -= 1
+        elif key in (curses.KEY_DOWN, ord("j")):
+            top += 1
+        elif key in (curses.KEY_NPAGE, ord(" ")):
+            top += body_height
+        elif key in (curses.KEY_PPAGE,):
+            top -= body_height
+        elif key in (ord("q"), 27):
+            return False
+        elif key in (10, 13):
+            return True if not enter_accepts else False
+
+
+def wrap_lines_for_screen(lines: list[str], width: int) -> list[str]:
+    wrapped: list[str] = []
+    for line in lines:
+        if not line:
+            wrapped.append("")
+        else:
+            wrapped.extend(wrap_text(line, width))
+    return wrapped
+
+
+PROFILE_ACTIONS = {
+    "__load_best_known": "Load best-known params for this model",
+    "__show_server_command": "Show equivalent llama-server command",
+}
+
+
 def edit_profile(stdscr, profile: Profile, models: list[str]) -> None:
-    fields = [k for k, _ in profile.items()]
+    fields = list(PROFILE_ACTIONS) + [k for k, _ in profile.items()]
     idx = 0
     while True:
         draw_profile_editor(stdscr, profile, fields, idx)
@@ -205,7 +278,7 @@ def edit_profile(stdscr, profile: Profile, models: list[str]) -> None:
         elif key in (ord("q"), 27):
             return
         elif key in (10, 13):
-            edit_profile_field(stdscr, profile, fields[idx], models)
+            handle_profile_editor_selection(stdscr, profile, fields[idx], models)
 
 
 def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int) -> None:
@@ -226,9 +299,12 @@ def draw_profile_editor_header(stdscr, panel: "Panel", profile: Profile) -> None
 def draw_profile_fields_panel(stdscr, panel: "Panel", profile: Profile, fields: list[str], idx: int) -> None:
     draw_panel(stdscr, panel, "Parameters")
     for i, key in enumerate(fields[: panel.inner_height]):
+        attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
+        if key in PROFILE_ACTIONS:
+            write_in_panel(stdscr, panel, i, f"▶ {PROFILE_ACTIONS[key]}", attr)
+            continue
         value = getattr(profile, key)
         shown = model_label(value) if key == "model" and value else value
-        attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
         write_in_panel(stdscr, panel, i, f"{key:15} {shown}", attr)
 
 
@@ -240,6 +316,8 @@ def draw_selected_field_panel(stdscr, panel: "Panel", profile: Profile, field: s
 
 
 def selected_field_lines(profile: Profile, field: str, width: int) -> list[str]:
+    if field in PROFILE_ACTIONS:
+        return profile_action_lines(profile, field, width)
     value = getattr(profile, field)
     lines = [f"{field} = {value}", ""]
     description = FIELD_DESCRIPTIONS.get(field, "")
@@ -249,6 +327,107 @@ def selected_field_lines(profile: Profile, field: str, width: int) -> list[str]:
         lines.extend(wrap_text(paragraph.strip(), width))
         lines.append("")
     return lines
+
+
+def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
+    if field == "__load_best_known":
+        lines = ["Load best-known params for this model", ""]
+        lines.extend(wrap_text(f"Reads {BEST_KNOWN_PARAMS} and applies validated recommendations for the selected model.", width))
+        lines.append("")
+        lines.extend(wrap_text("A preview is shown before values are changed. The profile model itself is kept unchanged.", width))
+        return lines
+    if field == "__show_server_command":
+        lines = ["Show equivalent llama-server command", ""]
+        lines.extend(wrap_text("Renders the current benchmark profile as a buun llama-server command where fields map cleanly to server flags.", width))
+        lines.append("")
+        lines.extend(wrap_text("Benchmark-only fields such as depths/prompt/gen/repetitions are not passed except depths is used to choose a context size.", width))
+        return lines
+    return [""]
+
+
+def handle_profile_editor_selection(stdscr, profile: Profile, field: str, models: list[str]) -> None:
+    if field == "__load_best_known":
+        load_best_known_for_profile(stdscr, profile)
+        return
+    if field == "__show_server_command":
+        show_server_command(stdscr, profile)
+        return
+    edit_profile_field(stdscr, profile, field, models)
+
+
+def load_best_known_for_profile(stdscr, profile: Profile) -> None:
+    if not profile.model:
+        show_message(stdscr, "Select a model before loading best-known params.")
+        return
+    recs = find_recommendations(profile.model)
+    if not recs:
+        show_message(stdscr, f"No recommendation found in {BEST_KNOWN_PARAMS}")
+        return
+    rec = choose_recommendation(stdscr, profile, recs)
+    if rec is None:
+        return
+    if confirm_recommendation(stdscr, profile, rec):
+        plan = apply_recommendation(profile, rec)
+        show_message(stdscr, f"Applied {len(plan.applied)} params from {rec.section}.")
+
+
+def choose_recommendation(stdscr, profile: Profile, recs):
+    if len(recs) == 1:
+        return recs[0]
+    labels = [f"{r.model} ({r.metadata.get('confidence', 'unknown')})" for r in recs]
+    picked = choose_from(stdscr, "Choose best-known params", labels, labels[0], "Multiple recommendations matched this model.")
+    if picked not in labels:
+        return None
+    return recs[labels.index(picked)]
+
+
+def confirm_recommendation(stdscr, profile: Profile, rec) -> bool:
+    plan = build_apply_plan(rec)
+    lines = recommendation_preview_lines(profile, rec, plan)
+    return show_scroll_text(stdscr, "Apply best-known params?", lines, accept_text="Enter apply  •  q/Esc cancel")
+
+
+def recommendation_preview_lines(profile: Profile, rec, plan) -> list[str]:
+    lines = [
+        f"Recommendation: {rec.section}",
+        f"Current model: {profile.model}",
+        f"Confidence: {rec.metadata.get('confidence', 'unknown')}",
+        "",
+        "Summary:",
+        rec.metadata.get("research_summary", "No summary."),
+        "",
+        "Changes:",
+    ]
+    if not plan.applied:
+        lines.append("  No valid profile params to apply.")
+    for key, value in plan.applied.items():
+        lines.append(f"  {key}: {getattr(profile, key)} -> {value}")
+    if plan.invalid:
+        lines.extend(["", "Invalid/not applied:"])
+        lines.extend(f"  {k}: {v}" for k, v in plan.invalid.items())
+    if plan.skipped:
+        lines.extend(["", "Unknown/skipped:"])
+        lines.extend(f"  {k}: {v}" for k, v in plan.skipped.items())
+    refs = rec.metadata.get("references")
+    if refs:
+        lines.extend(["", "References:", refs])
+    lines.extend(["", "Press Enter to apply these valid params, or q/Esc to cancel."])
+    return lines
+
+
+def show_server_command(stdscr, profile: Profile) -> None:
+    cmd = shlex.join(profile_server_command(profile))
+    lines = [
+        "Equivalent buun llama-server command:",
+        "",
+        cmd,
+        "",
+        "Notes:",
+        "- depths/prompt/gen/repetitions/warmup are benchmark-only and are not passed directly.",
+        "- depths is used only to choose --ctx-size.",
+        "- threads is reused for --threads and --threads-batch.",
+    ]
+    show_scroll_text(stdscr, "Equivalent llama-server command", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
 
 
 def edit_profile_field(stdscr, profile: Profile, field: str, models: list[str]) -> None:

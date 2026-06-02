@@ -98,12 +98,25 @@ Run benchmarks:
 ./build/bin/llama-bench -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q2_K_XL \
   --n-cpu-moe 33 --cache-type-k turbo4 --cache-type-v turbo3
 
+# Interactive buun benchmark TUI
+python3 scripts/bench-buun-tui.py
+
+# Research best-known params for models under ./models for the TUI
+python3 scripts/research-best-known-params.py
+
 # Matrix across configs
 python3 scripts/run-llama-bench-matrix.py
 
 # Full benchmark suite
 python3 scripts/bench-llama-suite.py
 ```
+
+The TUI can scan `./models`, invoke `pi -p`, and write researched heuristics to
+`bench-configs/buun/best-known-params.ini`. While editing a profile, use
+`Load best-known params for this model` to preview/apply them, or
+`Show equivalent llama-server command` to inspect the serving command implied by
+that profile. Treat these recommendations as starting points and benchmark them
+on your hardware.
 
 ## Directory Structure
 

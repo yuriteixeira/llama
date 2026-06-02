@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / "versions/buun/src/buun-llama-cpp/build/bin/llama-bench"
+SERVER = ROOT / "versions/buun/src/buun-llama-cpp/build/bin/llama-server"
 CONFIG_DIR = ROOT / "bench-configs/buun"
 LAST_CONFIG = CONFIG_DIR / ".last-config"
 RESULT_DIR = ROOT / "bench-results/buun-tui"
