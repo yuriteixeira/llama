@@ -27,6 +27,7 @@ from bench_buun_tui.models import find_models, model_label, model_path  # noqa: 
 class PresetRow:
     section: str
     model: str
+    alias: str
     ctx_size: int
     cache_type_k: str
     cache_type_v: str
@@ -37,6 +38,8 @@ class PresetRow:
     n_gpu_layers: int | None
     flash_attn: str
     score: float | None
+    high_score: float | None
+    wall_s: float | None
     pp_tps: float | None
     tg_tps: float | None
     sample_count: int | None
@@ -80,10 +83,16 @@ def main() -> int:
             continue
         section = unique_section_name(slugify(Path(resolved_model).stem), used_sections)
         used_sections.add(section)
+        score = median(agg.scores) if agg.scores else None
+        high_score = max(agg.scores) if agg.scores else None
+        wall_s = median(agg.wall_values) if agg.wall_values else None
+        pp_tps = median(agg.pp_values) if agg.pp_values else None
+        tg_tps = median(agg.tg_values) if agg.tg_values else None
         preset_rows.append(
             PresetRow(
                 section=section,
                 model=str(model_path(resolved_model).resolve()),
+                alias=build_alias(section, wall_s, pp_tps, tg_tps),
                 ctx_size=int(ranking.max_depth_for_config(samples, agg.config_key) or 262144),
                 cache_type_k=str(agg.type_k or ""),
                 cache_type_v=str(agg.type_v or ""),
@@ -93,9 +102,11 @@ def main() -> int:
                 n_cpu_moe=agg.n_cpu_moe,
                 n_gpu_layers=agg.n_gpu_layers,
                 flash_attn=ranking.normalize_bool_text(agg.flash_attn or "on") or "on",
-                score=median(agg.scores) if agg.scores else None,
-                pp_tps=median(agg.pp_values) if agg.pp_values else None,
-                tg_tps=median(agg.tg_values) if agg.tg_values else None,
+                score=score,
+                high_score=high_score,
+                wall_s=wall_s,
+                pp_tps=pp_tps,
+                tg_tps=tg_tps,
                 sample_count=agg.sample_count,
             )
         )
@@ -170,6 +181,7 @@ def render_presets(rows: list[PresetRow], fixed_params: list[tuple[str, str]]) -
 def render_section(name: str, row: PresetRow, fixed_params: list[tuple[str, str]], load_on_startup: bool) -> list[str]:
     params: list[tuple[str, str]] = [
         ("model", row.model),
+        ("alias", row.alias),
         ("ctx-size", str(row.ctx_size)),
     ]
     if row.cache_type_k:
@@ -200,7 +212,7 @@ def render_section(name: str, row: PresetRow, fixed_params: list[tuple[str, str]
 
     lines = [
         f"[{name}]",
-        f"; score={fmt(row.score)} pp_tps={fmt(row.pp_tps)} tg_tps={fmt(row.tg_tps)} samples={row.sample_count or ''}",
+        f"; score={fmt(row.score)} high_score={fmt(row.high_score)} wall_s={fmt(row.wall_s)} pp_tps={fmt(row.pp_tps)} tg_tps={fmt(row.tg_tps)} samples={row.sample_count or ''}",
     ]
     lines.extend(f"{key} = {value}" for key, value in params)
     return lines
@@ -256,6 +268,23 @@ def merge_params(base: list[tuple[str, str]], updates: list[tuple[str, str]]) ->
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "model"
+
+
+def build_alias(section: str, wall_s: float | None, pp_tps: float | None, tg_tps: float | None) -> str:
+    return f"{section}-w{fmt_alias_wall_ms(wall_s)}ms-pp{fmt_alias_tps(pp_tps)}-tg{fmt_alias_tps(tg_tps)}"
+
+
+def fmt_alias_wall_ms(value: float | None) -> str:
+    if value is None:
+        return "na"
+    return str(round(value * 1000))
+
+
+def fmt_alias_tps(value: float | None) -> str:
+    if value is None:
+        return "na"
+    rounded = round(value)
+    return str(int(rounded)) if rounded >= 1 else f"{value:.2f}".replace(".", "p")
 
 
 def unique_section_name(base: str, used: set[str]) -> str:
