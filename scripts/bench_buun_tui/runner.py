@@ -15,6 +15,7 @@ from .telemetry import capture_telemetry
 
 def run_config(config_path: Path) -> int:
     cfg = load_config(config_path)
+    started_at = time.time()
     out_dir = create_result_dir(cfg.run_prefix)
     live_summary = init_live_summary(out_dir)
     all_rows: list[dict] = []
@@ -27,7 +28,13 @@ def run_config(config_path: Path) -> int:
             errors.append(error)
             break
 
-    write_final_outputs(out_dir, live_summary, all_rows, telemetry_rows, errors)
+    finished_at = time.time()
+    run_meta = {
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "elapsed_seconds": finished_at - started_at,
+    }
+    write_final_outputs(out_dir, live_summary, all_rows, telemetry_rows, errors, run_meta)
     return 1 if errors else 0
 
 
@@ -108,6 +115,17 @@ def print_progress(profile_name: str, row: dict) -> None:
     )
 
 
+def format_duration(seconds: float | int) -> str:
+    seconds = max(0, int(round(float(seconds))))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def profile_error(profile, err_path: Path, returncode: int, live_summary: Path) -> dict:
     stderr_text = err_path.read_text(errors="replace") if err_path.exists() else ""
     print(f"{profile.name} failed; see {err_path}; partial results: {live_summary}")
@@ -120,15 +138,16 @@ def profile_error(profile, err_path: Path, returncode: int, live_summary: Path) 
     }
 
 
-def write_final_outputs(out_dir: Path, live_summary: Path, all_rows: list[dict], telemetry_rows: list[dict], errors: list[dict]) -> None:
+def write_final_outputs(out_dir: Path, live_summary: Path, all_rows: list[dict], telemetry_rows: list[dict], errors: list[dict], run_meta: dict) -> None:
     summary = out_dir / "summary.csv"
     telemetry = out_dir / "telemetry.json"
     report = out_dir / "index.html"
     write_summary(all_rows, summary)
     telemetry.write_text(json.dumps(telemetry_rows, indent=2))
-    write_html_report(all_rows, report, errors, telemetry_rows)
+    write_html_report(all_rows, report, errors, telemetry_rows, run_meta)
     print(f"summary: {summary}")
     print(f"live:    {live_summary}")
     print(f"telemetry: {telemetry}")
     print(f"report:    {report}")
+    print(f"total time: {format_duration(run_meta.get('elapsed_seconds', 0))}")
     print(f"report URL path: /{out_dir.name}/")

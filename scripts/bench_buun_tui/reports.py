@@ -47,8 +47,14 @@ def _with_model_offload_info(row: dict) -> dict:
     return out
 
 
-def write_html_report(rows: list[dict], path: Path, errors: list[dict] | None = None, telemetry: list[dict] | None = None) -> None:
-    html = render_html_report(rows, errors or [], telemetry or [])
+def write_html_report(
+    rows: list[dict],
+    path: Path,
+    errors: list[dict] | None = None,
+    telemetry: list[dict] | None = None,
+    run_meta: dict | None = None,
+) -> None:
+    html = render_html_report(rows, errors or [], telemetry or [], run_meta or {})
     path.write_text(html)
     copy_report_assets(path.parent)
 
@@ -59,13 +65,14 @@ def copy_report_assets(report_dir: Path) -> None:
     (assets / D3_SCRIPT.name).write_bytes(D3_SCRIPT.read_bytes())
 
 
-def render_html_report(rows: list[dict], errors: list[dict], telemetry: list[dict] | None = None) -> str:
+def render_html_report(rows: list[dict], errors: list[dict], telemetry: list[dict] | None = None, run_meta: dict | None = None) -> str:
     template = HTML_REPORT_TEMPLATE.read_text()
     return (
         template
         .replace("__ROWS_JSON__", json.dumps(report_rows(rows)))
         .replace("__ERRORS_JSON__", json.dumps(errors))
         .replace("__TELEMETRY_JSON__", json.dumps(telemetry or []))
+        .replace("__RUN_META_JSON__", json.dumps(run_meta or {}))
     )
 
 

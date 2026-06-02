@@ -30,6 +30,7 @@
 <body>
   <h1>Buun llama-bench report</h1>
   <p>Separate charts are used for prompt processing (<code>pp*</code>) and generation (<code>tg*</code>) so the much faster prompt numbers do not flatten generation lines.</p>
+  <p id="run-meta"></p>
   <div class="tabs">
     <button class="tab-btn active" data-tab="charts-tab">Charts</button>
     <button class="tab-btn" data-tab="table-tab">Raw table</button>
@@ -59,6 +60,7 @@
 const rows = __ROWS_JSON__;
 const errors = __ERRORS_JSON__;
 const telemetry = __TELEMETRY_JSON__;
+const runMeta = __RUN_META_JSON__;
 document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -72,6 +74,25 @@ function num(x) { return Number(x || 0); }
 function testName(r) { return num(r.n_prompt) > 0 ? `pp${r.n_prompt}` : (num(r.n_gen) > 0 ? `tg${r.n_gen}` : 'unknown'); }
 function seriesKey(r) { return `${r.profile} ${r.model?.split('/').pop() ?? ''} ${r.cache_strategy} b=${r.n_batch} ub=${r.n_ubatch} t=${r.n_threads} moe=${r.n_cpu_moe} ngl=${r.n_gpu_layers} fa=${r.flash_attn}`; }
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function formatDuration(seconds) {
+  seconds = Math.max(0, Math.round(num(seconds)));
+  const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+  if (h) return `${h}h ${m}m ${s}s`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+function telemetryElapsedSeconds() {
+  const timestamps = telemetry.map(s => num(s.sample_ts)).filter(Number.isFinite);
+  return timestamps.length ? Math.max(...timestamps) - Math.min(...timestamps) : 0;
+}
+function drawRunMeta() {
+  const elapsed = num(runMeta.elapsed_seconds) || telemetryElapsedSeconds();
+  const parts = [];
+  if (elapsed) parts.push(`<strong>Total benchmark time:</strong> ${esc(formatDuration(elapsed))}`);
+  if (runMeta.started_at) parts.push(`started ${esc(new Date(runMeta.started_at * 1000).toLocaleString())}`);
+  if (runMeta.finished_at) parts.push(`finished ${esc(new Date(runMeta.finished_at * 1000).toLocaleString())}`);
+  document.getElementById('run-meta').innerHTML = parts.join(' · ');
+}
 function chartWrap(title, targetId) {
   const wrap = document.createElement('div');
   wrap.className = 'chart';
@@ -117,7 +138,7 @@ function addAxes(svg, x, y, width, height, margin, xLabel, yLabel) {
     .attr('fill', '#333')
     .text(yLabel);
 }
-function drawLineChart({targetId, title, data, groupKey, xValue, yValue, xLabel, yLabel, tooltip, width=900, height=460, margin={top:30,right:25,bottom:65,left:75}, yFromZero=true}) {
+function drawLineChart({targetId, title, data, groupKey, xValue, yValue, xLabel, yLabel, tooltip, width=900, height=460, margin={top:30,right:25,bottom:65,left:75}, yFromZero=true, colorKey=(key, sample) => key, dash=(key, sample) => ''}) {
   if (!data.length) return;
   const wrap = chartWrap(title, targetId);
   const svg = makeSvg(wrap, width, height);
@@ -137,14 +158,18 @@ function drawLineChart({targetId, title, data, groupKey, xValue, yValue, xLabel,
     .nice()
     .range([height - margin.bottom, margin.top]);
   addAxes(svg, x, y, width, height, margin, xLabel, yLabel);
-  const color = d3.scaleOrdinal([...groups.keys()], colors);
+  const colorKeys = [...new Set([...groups].map(([key, items]) => colorKey(key, items[0])))];
+  const color = d3.scaleOrdinal(colorKeys, colors);
   const line = d3.line().defined(d => Number.isFinite(xValue(d)) && Number.isFinite(yValue(d))).x(d => x(xValue(d))).y(d => y(yValue(d)));
   for (const [key, items] of groups) {
+    const sample = items[0];
+    const stroke = color(colorKey(key, sample));
     svg.append('path')
       .datum(items)
       .attr('fill', 'none')
-      .attr('stroke', color(key))
+      .attr('stroke', stroke)
       .attr('stroke-width', 2)
+      .attr('stroke-dasharray', dash(key, sample))
       .attr('d', line);
     svg.append('g')
       .selectAll('circle')
@@ -153,11 +178,11 @@ function drawLineChart({targetId, title, data, groupKey, xValue, yValue, xLabel,
       .attr('cx', d => x(xValue(d)))
       .attr('cy', d => y(yValue(d)))
       .attr('r', 3.5)
-      .attr('fill', color(key))
+      .attr('fill', stroke)
       .append('title')
       .text(d => tooltip(key, d));
   }
-  appendLegend(wrap, groups, color);
+  appendLegend(wrap, groups, key => color(colorKey(key, groups.get(key)[0])));
 }
 
 const rowsWithTest = rows.map(r => Object.assign({}, r, {test: r.test ?? testName(r)}));
@@ -178,12 +203,12 @@ for (const t of [...new Set(rowsWithTest.map(r => r.test))].sort()) {
 function drawTelemetryChart(specs, title, unit='') {
   specs = Array.isArray(specs) ? specs : [{field: specs, label: specs}];
   specs = specs.map(spec => typeof spec === 'string' ? {field: spec, label: spec} : spec);
-  const samples = telemetry.flatMap(s => specs.map(spec => ({...s, _field: spec.field, _label: spec.label ?? spec.field, _value: num(s[spec.field])})))
+  const samples = telemetry.flatMap(s => specs.map(spec => ({...s, _field: spec.field, _label: spec.label ?? spec.field, _profile: s.profile ?? 'run', _dashed: !!spec.dashed, _value: num(s[spec.field])})))
     .filter(s => Number.isFinite(s._value) && Number.isFinite(num(s.sample_ts)));
   if (!samples.length) return;
-  const grouped = d3.group(samples, s => `${s.profile ?? 'run'} ${s._label}`);
+  const grouped = d3.group(samples, s => `${s._profile} ${s._label}`);
   const starts = new Map([...grouped].map(([k, items]) => [k, d3.min(items, s => num(s.sample_ts))]));
-  const withRelativeTime = samples.map(s => ({...s, _series: `${s.profile ?? 'run'} ${s._label}`, _rel_ts: num(s.sample_ts) - starts.get(`${s.profile ?? 'run'} ${s._label}`)}));
+  const withRelativeTime = samples.map(s => ({...s, _series: `${s._profile} ${s._label}`, _rel_ts: num(s.sample_ts) - starts.get(`${s._profile} ${s._label}`)}));
   drawLineChart({
     targetId: 'telemetry-charts',
     title,
@@ -195,16 +220,18 @@ function drawTelemetryChart(specs, title, unit='') {
     yLabel: unit || title,
     height: 360,
     yFromZero: false,
+    colorKey: (k, s) => s._profile,
+    dash: (k, s) => s._dashed ? '5,4' : '',
     tooltip: (k, s) => `${k}\n${s._field}=${s._value.toFixed(2)} ${unit}\nt=${num(s._rel_ts).toFixed(1)}s\ndepth=${s.n_depth ?? ''}`,
   });
 }
 function drawTelemetryCharts() {
   const gpuFields = [
-    [[{field:'gpu_temp_c', label:'GPU'}, {field:'cpu_temp_c', label:'CPU'}], 'GPU/CPU temperature', '°C'],
+    [[{field:'gpu_temp_c', label:'GPU'}, {field:'cpu_temp_c', label:'CPU', dashed:true}], 'GPU/CPU temperature', '°C'],
     [[{field:'gpu_power_w', label:'GPU'}], 'GPU power draw', 'W'],
-    [[{field:'gpu_util_pct', label:'GPU'}, {field:'cpu_util_pct', label:'CPU'}], 'GPU/CPU utilization', '%'],
-    [[{field:'gpu_mem_util_pct', label:'GPU VRAM'}, {field:'ram_used_pct', label:'RAM'}], 'GPU/RAM memory utilization', '%'],
-    [[{field:'gpu_mem_used_mib', label:'GPU VRAM'}, {field:'ram_used_mib', label:'RAM'}], 'GPU/RAM memory used', 'MiB'],
+    [[{field:'gpu_util_pct', label:'GPU'}, {field:'cpu_util_pct', label:'CPU', dashed:true}], 'GPU/CPU utilization', '%'],
+    [[{field:'gpu_mem_util_pct', label:'GPU VRAM'}, {field:'ram_used_pct', label:'RAM', dashed:true}], 'GPU/RAM memory utilization', '%'],
+    [[{field:'gpu_mem_used_mib', label:'GPU VRAM'}, {field:'ram_used_mib', label:'RAM', dashed:true}], 'GPU/RAM memory used', 'MiB'],
   ];
   gpuFields.forEach(([specs, title, unit]) => drawTelemetryChart(specs, title, unit));
   const merged = Object.assign({}, ...telemetry);
@@ -239,6 +266,7 @@ function drawOffloadChart() {
   g.append('text').attr('x', r => x(num(r.model_layers)) + 5).attr('y', 13).attr('fill', '#333').text(r => `${r.cpu_moe_layers} CPU / ${r.remaining_moe_layers} remaining / ${r.model_layers} total`);
 }
 
+drawRunMeta();
 drawOffloadChart();
 drawTelemetryCharts();
 if (errors.length) {
