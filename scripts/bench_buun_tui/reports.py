@@ -4,7 +4,7 @@ import csv
 import json
 from pathlib import Path
 
-from .models import model_metadata
+from .models import model_label, model_metadata
 from .paths import D3_SCRIPT, HTML_REPORT_TEMPLATE
 
 
@@ -33,6 +33,10 @@ def report_rows(rows: list[dict]) -> list[dict]:
 def _with_model_offload_info(row: dict) -> dict:
     out = dict(row)
     model = out.get("model") or out.get("model_filename") or ""
+    if model:
+        out["model_path"] = str(model)
+        out["model_display"] = model_label(str(model))
+        out["model"] = out["model_display"]
     try:
         meta = model_metadata(str(model))
         if meta.get("block_count"):
@@ -77,7 +81,7 @@ def render_html_report(rows: list[dict], errors: list[dict], telemetry: list[dic
 
 
 SUMMARY_FIELDS = [
-    "profile", "model", "cache_strategy", "test", "n_depth", "n_prompt", "n_gen",
+    "profile", "model", "model_path", "cache_strategy", "test", "n_depth", "n_prompt", "n_gen",
     "n_batch", "n_ubatch", "n_threads", "n_cpu_moe", "n_gpu_layers", "flash_attn",
     "model_layers", "cpu_moe_layers", "remaining_moe_layers",
     "type_k", "type_v", "avg_ts", "stddev_ts", "avg_ns",

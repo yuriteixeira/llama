@@ -18,7 +18,7 @@ Serve large language models locally on your GPU using llama.cpp.
 
 Both launchers start a local API server with the default model:
 
-> **Qwen3.6-35B-A3B** — 35B total params, 3B active (MoE), IQ4_NL quantized (~14 GB)
+> **Qwen3.6-35B-A3B [35B total, A3B active, MoE]** — IQ4_NL quantized (~14 GB)
 
 The server exposes an OpenAI-compatible API endpoint on **port 8080**.
 

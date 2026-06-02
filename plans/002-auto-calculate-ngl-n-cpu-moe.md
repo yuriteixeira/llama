@@ -31,8 +31,9 @@ The calculation should use the selected GGUF model's size, layer count, tensor m
   - `gpu_layers` + `n_cpu_moe` calculation
   - preview/explanation data model
 - Update `scripts/bench_buun_tui/tui.py`
-  - add profile action: **Auto-calculate GPU/MoE offload**
+  - add profile actions: **Auto-calculate GPU/MoE offload** and **Smoke-test current profile load**
   - show a preview before applying
+  - optionally offer a smoke test immediately after applying auto-offload values
 - Optionally extend `scripts/bench_buun_tui/models.py`
   - expose richer GGUF metadata helpers if reused elsewhere.
 
@@ -52,9 +53,10 @@ For the selected `profile.model`:
    - if tensor-level sizing fails, estimate per-layer weight bytes as `model_size_bytes / block_count` with a conservative overhead reserve.
 4. GPU budget:
    - prefer `nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits`.
-   - fallback to project target: RTX 3070, 8192 MiB VRAM.
+   - fallback to project target usable CUDA memory: RTX 3070, about 7836 MiB as reported by llama.cpp.
+   - use currently free VRAM as the practical budget when available, not nominal board memory.
    - budget only for model-runtime needs, not a generic desktop/OS reserve because this is a headless server.
-   - subtract estimated runtime allocations: KV cache for the desired max context, CUDA/compute workspace, graph overhead, and batch/ubatch scratch buffers.
+   - subtract estimated runtime allocations: KV cache for the desired max context, CUDA/compute workspace, graph overhead, late CUDA allocation slack, and batch/ubatch scratch buffers.
 5. CPU/RAM budget:
    - read `/proc/meminfo` for `MemAvailable`; do not subtract a fixed OS reserve beyond memory that is already unavailable.
    - estimate CPU-resident bytes as all non-GPU layers plus MoE expert tensors moved by `n_cpu_moe`.
@@ -138,7 +140,7 @@ Behavior:
 1. **Offload calculator module**
    - Add `offload.py` with pure functions for capability detection, tensor sizing, VRAM budget, and recommendation selection.
 2. **TUI integration**
-   - Add the profile action, help text, preview screen, confirmation, and apply step.
+   - Add the profile actions, help text, preview screen, confirmation, apply step, and smoke-test flow.
 3. **Manual verification**
    - Test current Qwen3.6 MoE GGUF on RTX 3070 target.
    - Verify dense-model behavior with any non-MoE GGUF if available.

@@ -27,6 +27,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+from bench_buun_tui.models import model_detail_brackets
+
 
 DEFAULT_MODEL = "models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf"
 BUUN_LIB_REL = "versions/buun/src/buun-llama-cpp/build"
@@ -64,7 +66,7 @@ def parse_models(value: str, root: Path) -> list[dict]:
         model_path = Path(path).expanduser()
         if not model_path.is_absolute():
             model_path = root / model_path
-        models.append({"label": label, "path": str(model_path)})
+        models.append({"label": label, "display_label": f"{label} {model_detail_brackets(str(model_path))}", "path": str(model_path)})
     return models
 
 
@@ -161,7 +163,7 @@ def run_one(args, root: Path, raw_dir: Path, server: str, model: dict, ctx: int,
         "PORT": str(args.port),
     })
 
-    print(f"START {label}", file=sys.stderr, flush=True)
+    print(f"START {label} — model {model['display_label']}", file=sys.stderr, flush=True)
     with server_log_path.open("w") as server_log:
         proc = subprocess.Popen(cmd, cwd=root, env=env, stdout=server_log, stderr=subprocess.STDOUT, text=True)
         try:
@@ -197,6 +199,7 @@ def run_one(args, root: Path, raw_dir: Path, server: str, model: dict, ctx: int,
     result.update({
         "server": server,
         "model_label": model["label"],
+        "model_display": model["display_label"],
         "model_path": model["path"],
         "ctx": ctx,
         "transport_requested": transport,
@@ -227,7 +230,7 @@ def compact_metrics(results: list[dict]) -> list[dict]:
         errors = len(tests) - len(ok) + (1 if item.get("error") and not tests else 0)
         rows.append({
             "server": item.get("server"),
-            "model": item.get("model_label"),
+            "model": item.get("model_display") or item.get("model_label"),
             "context": item.get("ctx"),
             "transport": item.get("transport_requested"),
             "total_wall_s": round(sum(r["wall_s"] for r in ok), 3),
@@ -266,7 +269,7 @@ def summarize(results: list[dict], llm_analysis: str | None = None) -> str:
         total = sum(r["wall_s"] for r in ok)
         avg = statistics.mean([r["wall_s"] for r in ok]) if ok else 0
         lines.append(
-            f"| {item.get('server')} | {item.get('model_label')} | {item.get('ctx') // 1024}k | "
+            f"| {item.get('server')} | {item.get('model_display') or item.get('model_label')} | {item.get('ctx') // 1024}k | "
             f"{item.get('transport_requested')} | {total:.2f}s | {avg:.2f}s | {errors} |"
         )
 
@@ -281,7 +284,7 @@ def summarize(results: list[dict], llm_analysis: str | None = None) -> str:
             if "error" in test:
                 status = "error"
             lines.append(
-                f"| {item.get('server')} | {item.get('model_label')} | {item.get('ctx') // 1024}k | "
+                f"| {item.get('server')} | {item.get('model_display') or item.get('model_label')} | {item.get('ctx') // 1024}k | "
                 f"{item.get('transport_requested')} | {prompt} | {wall} | {status} |"
             )
     lines.append("")
@@ -333,7 +336,7 @@ def generate_llm_analysis(args, root: Path, raw_dir: Path, results: list[dict], 
         f"Compact benchmark metrics JSON:\n{json.dumps(compact_metrics(results), indent=2)}"
     )
 
-    print(f"START {label}", file=sys.stderr, flush=True)
+    print(f"START {label} — model {model['display_label']}", file=sys.stderr, flush=True)
     with server_log_path.open("w") as server_log:
         proc = subprocess.Popen(cmd, cwd=root, env=env, stdout=server_log, stderr=subprocess.STDOUT, text=True)
         try:

@@ -73,8 +73,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click
 const colors = d3.schemeTableau10;
 const fields = ['profile','model','model_layers','cpu_moe_layers','remaining_moe_layers','cache_strategy','test','n_depth','n_prompt','n_gen','n_batch','n_ubatch','n_threads','n_cpu_moe','n_gpu_layers','flash_attn','type_k','type_v','avg_ts','stddev_ts'];
 function num(x) { return Number(x || 0); }
+function modelDisplay(r) { return r.model_display ?? (r.model?.split('/').pop() ?? ''); }
 function testName(r) { return num(r.n_prompt) > 0 ? `pp${r.n_prompt}` : (num(r.n_gen) > 0 ? `tg${r.n_gen}` : 'unknown'); }
-function seriesKey(r) { return `${r.profile} ${r.model?.split('/').pop() ?? ''} ${r.cache_strategy} b=${r.n_batch} ub=${r.n_ubatch} t=${r.n_threads} moe=${r.n_cpu_moe} ngl=${r.n_gpu_layers} fa=${r.flash_attn}`; }
+function seriesKey(r) { return `${r.profile} ${modelDisplay(r)} ${r.cache_strategy} b=${r.n_batch} ub=${r.n_ubatch} t=${r.n_threads} moe=${r.n_cpu_moe} ngl=${r.n_gpu_layers} fa=${r.flash_attn}`; }
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function formatDuration(seconds) {
   seconds = Math.max(0, Math.round(num(seconds)));
@@ -272,7 +273,7 @@ function drawOffloadChart() {
   svg.append('rect').attr('x', margin.left + 180).attr('y', 6).attr('width', 14).attr('height', 10).attr('fill', '#1f77b4');
   svg.append('text').attr('x', margin.left + 95).attr('y', 16).attr('fill', '#333').text('remaining MoE');
   const g = svg.selectAll('g.offload-row').data(configs).join('g').attr('class', 'offload-row').attr('transform', (d, i) => `translate(0,${margin.top + i * rowH + 8})`);
-  g.append('text').attr('x', 4).attr('y', 13).attr('fill', '#333').text(r => `${r.profile} ${(r.model ?? '').split('/').pop()} ngl=${r.n_gpu_layers} ncmoe=${r.n_cpu_moe}`);
+  g.append('text').attr('x', 4).attr('y', 13).attr('fill', '#333').text(r => `${r.profile} ${modelDisplay(r)} ngl=${r.n_gpu_layers} ncmoe=${r.n_cpu_moe}`);
   g.append('rect').attr('x', margin.left).attr('y', 0).attr('width', r => x(Math.min(num(r.model_layers), num(r.cpu_moe_layers))) - margin.left).attr('height', 18).attr('fill', '#d62728');
   g.append('rect').attr('x', r => x(Math.min(num(r.model_layers), num(r.cpu_moe_layers)))).attr('y', 0).attr('width', r => x(num(r.model_layers)) - x(Math.min(num(r.model_layers), num(r.cpu_moe_layers)))).attr('height', 18).attr('fill', '#1f77b4');
   g.append('rect').attr('x', margin.left).attr('y', 0).attr('width', r => x(num(r.model_layers)) - margin.left).attr('height', 18).attr('fill', 'none').attr('stroke', '#333');

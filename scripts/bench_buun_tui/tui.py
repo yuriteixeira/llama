@@ -16,13 +16,14 @@ from .best_known import (
     load_research_meta,
     run_best_known_research,
 )
-from .commands import profile_server_command
+from .commands import profile_command, profile_server_command
 from .config_store import find_saved_configs, load_config, remember_config, save_config, slugify
 from .models import (
     choose_default_model,
     find_models,
     gpu_layer_options,
     model_description,
+    model_detail_brackets,
     model_label,
     model_options,
 )
@@ -116,7 +117,7 @@ def draw_profiles_panel(stdscr, panel: "Panel", profiles: list[Profile]) -> None
 
 def draw_profile_summary(stdscr, panel: "Panel", profile: Profile, row: int) -> int:
     lines = [
-        f"{profile.name}: {Path(profile.model).name}",
+        f"{profile.name}: {model_label(profile.model)}",
         f"cache={profile.cache_strategy} depths={profile.depths}",
         f"batch={profile.batch_size} ubatch={profile.ubatch_size} threads={profile.threads}",
         f"moe={profile.n_cpu_moe} ngl={profile.gpu_layers} fa={profile.flash_attn} mmap={profile.no_mmap}",
@@ -173,7 +174,7 @@ def research_best_known_action(stdscr) -> None:
 
 
 def run_best_known_research_with_popup(stdscr, models: list[str] | None = None) -> bool:
-    scope = f" for {models[0]}" if models and len(models) == 1 else " for all models"
+    scope = f" for {model_label(models[0])}" if models and len(models) == 1 else " for all models"
     output_lines = [f"Starting pi streaming research{scope} with: pi --mode json <research prompt>"]
 
     def on_output(chunk: str) -> None:
@@ -335,6 +336,7 @@ def wrap_lines_for_screen(lines: list[str], width: int) -> list[str]:
 PROFILE_ACTIONS = {
     "__load_best_known": "Load best-known params for this model",
     "__auto_offload": "Auto-calculate GPU/MoE offload",
+    "__smoke_test": "Smoke-test current profile load",
     "__copy_from_other": "Copy bench params from other profile",
     "__show_server_command": "Show equivalent llama-server command",
 }
@@ -367,7 +369,7 @@ def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int) -
 
 def draw_profile_editor_header(stdscr, panel: "Panel", profile: Profile) -> None:
     draw_panel(stdscr, panel, f"Editing {profile.name}")
-    write_in_panel(stdscr, panel, 0, Path(profile.model).name or "No model selected")
+    write_in_panel(stdscr, panel, 0, model_label(profile.model))
     write_in_panel(stdscr, panel, 1, f"cache={profile.cache_strategy} depths={profile.depths}")
 
 
@@ -394,7 +396,8 @@ def selected_field_lines(profile: Profile, field: str, width: int) -> list[str]:
     if field in PROFILE_ACTIONS:
         return profile_action_lines(profile, field, width)
     value = getattr(profile, field)
-    lines = [f"{field} = {value}", ""]
+    shown = model_label(value) if field == "model" and value else value
+    lines = [f"{field} = {shown}", ""]
     description = FIELD_DESCRIPTIONS.get(field, "")
     if field in {"gpu_layers", "n_cpu_moe"}:
         description = enrich_preset_description(profile, field, description)
@@ -417,6 +420,12 @@ def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
         lines.append("")
         lines.extend(wrap_text("A preview shows the estimated GPU/CPU split before values are changed.", width))
         return lines
+    if field == "__smoke_test":
+        lines = ["Smoke-test current profile load", ""]
+        lines.extend(wrap_text("Runs a brief llama-bench pass with the current profile values to verify the model/context actually loads. It uses the profile's max depth as the test context, with prompt=0, gen=1, repetitions=1.", width))
+        lines.append("")
+        lines.extend(wrap_text("This is useful after auto-offload or any manual ngl/n_cpu_moe change.", width))
+        return lines
     if field == "__copy_from_other":
         lines = ["Copy bench params from other profile", ""]
         lines.extend(wrap_text("Copies all benchmark/profile parameters from the other profile, but keeps this profile's model unchanged.", width))
@@ -438,6 +447,9 @@ def handle_profile_editor_selection(stdscr, profile: Profile, field: str, models
         return
     if field == "__auto_offload":
         auto_calculate_offload_for_profile(stdscr, profile)
+        return
+    if field == "__smoke_test":
+        smoke_test_current_profile(stdscr, profile)
         return
     if field == "__copy_from_other":
         copy_from_other_profile(stdscr, profile, other_profile)
@@ -474,6 +486,17 @@ def auto_calculate_offload_for_profile(stdscr, profile: Profile) -> None:
         profile.gpu_layers = rec.gpu_layers
         profile.n_cpu_moe = rec.n_cpu_moe
         show_message(stdscr, f"Applied gpu_layers={rec.gpu_layers}, n_cpu_moe={rec.n_cpu_moe}.")
+        if show_scroll_text(stdscr, "Smoke-test now?", ["Run a brief load test with the updated profile right now?", "", f"Context: {desired_context} tokens", f"Model: {model_label(profile.model)}"], accept_text="Enter run smoke test  •  q/Esc skip"):
+            run_smoke_test_with_popup(stdscr, profile, desired_context=desired_context)
+
+
+def smoke_test_current_profile(stdscr, profile: Profile) -> None:
+    if not profile.model:
+        show_message(stdscr, "Select a model before running a smoke test.")
+        return
+    desired_context = smoke_test_context(profile)
+    if show_scroll_text(stdscr, "Smoke-test current profile?", smoke_test_preview_lines(profile, desired_context), accept_text="Enter run smoke test  •  q/Esc cancel"):
+        run_smoke_test_with_popup(stdscr, profile, desired_context=desired_context)
 
 
 def default_offload_context(profile: Profile) -> str:
@@ -494,8 +517,9 @@ def auto_offload_preview_lines(profile: Profile, rec) -> list[str]:
     candidate = rec.candidate
     supports_moe = "unknown" if model.supports_moe is None else "yes" if model.supports_moe else "no"
     lines = [
-        f"Model: {profile.model}",
-        f"Name: {model.name}",
+        f"Model: {model_label(profile.model)}",
+        f"Path: {profile.model}",
+        f"Name: {model.name} {model_detail_brackets(profile.model) if profile.model else ''}",
         f"Architecture: {model.architecture}",
         f"Layers/block_count: {model.block_count}",
         f"MoE support: {supports_moe}",
@@ -509,7 +533,7 @@ def auto_offload_preview_lines(profile: Profile, rec) -> list[str]:
         "",
         "Budgets and target:",
         f"  Desired max context: {budget.desired_context} tokens",
-        f"  VRAM total: {format_bytes(budget.vram_total_bytes)}",
+        f"  VRAM usable budget: {format_bytes(budget.vram_total_bytes)}",
         f"  VRAM free now: {format_bytes(budget.vram_free_bytes) if budget.vram_free_bytes is not None else 'unknown'}",
         f"  RAM MemAvailable: {format_bytes(budget.ram_available_bytes)}",
         f"  GPU runtime workspace: {format_bytes(budget.gpu_workspace_bytes)}",
@@ -520,7 +544,7 @@ def auto_offload_preview_lines(profile: Profile, rec) -> list[str]:
         f"  CPU/RAM weights: {format_bytes(candidate.cpu_weight_bytes)}",
         f"  GPU KV cache: {format_bytes(candidate.gpu_kv_bytes)}",
         f"  CPU KV cache: {format_bytes(candidate.cpu_kv_bytes)}",
-        f"  GPU total: {format_bytes(candidate.gpu_total_bytes)} / {format_bytes(budget.vram_total_bytes)}",
+        f"  GPU total: {format_bytes(candidate.gpu_total_bytes)} / {format_bytes(budget.vram_total_bytes)} usable",
         f"  RAM total: {format_bytes(candidate.cpu_total_bytes)} / {format_bytes(budget.ram_available_bytes)}",
     ]
     if candidate.gpu_over_bytes or candidate.cpu_over_bytes:
@@ -537,6 +561,68 @@ def auto_offload_preview_lines(profile: Profile, rec) -> list[str]:
     return lines
 
 
+def smoke_test_context(profile: Profile) -> int:
+    vals = [int(part.strip()) for part in profile.depths.split(",") if part.strip().isdigit()]
+    return max(vals) if vals else 512
+
+
+def smoke_test_preview_lines(profile: Profile, desired_context: int) -> list[str]:
+    return [
+        "Smoke-test current profile load",
+        "",
+        f"Model: {model_label(profile.model)}",
+        f"Path: {profile.model}",
+        f"Context used for test: {desired_context} tokens",
+        f"gpu_layers/ngl: {profile.gpu_layers}",
+        f"n_cpu_moe: {profile.n_cpu_moe}",
+        f"batch_size: {profile.batch_size}  ubatch_size: {profile.ubatch_size}",
+        f"threads: {profile.threads}",
+        f"cache_strategy: {profile.cache_strategy}  flash_attn: {profile.flash_attn}  no_mmap: {profile.no_mmap}",
+        "",
+        "This runs a minimal llama-bench pass to validate context creation and model load.",
+        "",
+        "Press Enter to run, or q/Esc to cancel.",
+    ]
+
+
+def run_smoke_test_with_popup(stdscr, profile: Profile, desired_context: int) -> bool:
+    if not profile.model:
+        show_message(stdscr, "Select a model before running a smoke test.")
+        return False
+    test_profile = copy.deepcopy(profile)
+    test_profile.depths = str(desired_context)
+    test_profile.prompt = "0"
+    test_profile.gen = "1"
+    test_profile.repetitions = "1"
+    test_profile.warmup = "false"
+    cmd = profile_command(test_profile, Path("smoke-test.jsonl"))
+    cmd_text = shlex.join(cmd)
+    output_lines = [f"Starting smoke test with: {cmd_text}"]
+
+    def on_output(chunk: str) -> None:
+        append_output_lines(output_lines, chunk)
+        draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Streaming llama-bench output... wait for completion")
+
+    draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Starting smoke test...")
+    import subprocess
+
+    proc = subprocess.Popen(cmd, cwd=Path(__file__).resolve().parents[2], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+    assert proc.stdout is not None
+    try:
+        for chunk in proc.stdout:
+            on_output(chunk)
+    finally:
+        returncode = proc.wait()
+    lines = [f"Smoke test command: {cmd_text}", f"Return code: {returncode}", "", "Output:"]
+    lines.extend(output_lines[1:])
+    if returncode == 0:
+        lines.extend(["", "Smoke test passed."])
+    else:
+        lines.extend(["", "Smoke test failed."])
+    show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+    return returncode == 0
+
+
 def copy_from_other_profile(stdscr, profile: Profile, other_profile: Profile | None) -> None:
     if other_profile is None:
         show_message(stdscr, "No other profile available to copy from.")
@@ -550,8 +636,8 @@ def confirm_copy_from_other_profile(stdscr, profile: Profile, other_profile: Pro
     lines = [
         f"Copy bench params from {other_profile.name} to {profile.name}?",
         "",
-        f"Current model kept: {profile.model}",
-        f"Source model ignored: {other_profile.model}",
+        f"Current model kept: {model_label(profile.model)}",
+        f"Source model ignored: {model_label(other_profile.model)}",
         "",
         "Changes:",
     ]
@@ -584,7 +670,7 @@ def load_best_known_for_profile(stdscr, profile: Profile) -> None:
             return
         recs = find_recommendations(profile.model)
     if not recs:
-        show_message(stdscr, f"Research completed, but no recommendation matched {profile.model} in {BEST_KNOWN_PARAMS}")
+        show_message(stdscr, f"Research completed, but no recommendation matched {model_label(profile.model)} in {BEST_KNOWN_PARAMS}")
         return
     rec = choose_recommendation(stdscr, profile, recs)
     if rec is None:
@@ -598,7 +684,8 @@ def confirm_research_missing_recommendation(stdscr, profile: Profile) -> bool:
     lines = [
         "No saved recommendation matched this model.",
         "",
-        f"Model: {profile.model}",
+        f"Model: {model_label(profile.model)}",
+        f"Path: {profile.model}",
         f"Recommendation file: {BEST_KNOWN_PARAMS}",
         "",
         "Press Enter to run streaming pi research for this model only and watch the output live.",
@@ -609,7 +696,7 @@ def confirm_research_missing_recommendation(stdscr, profile: Profile) -> bool:
 def choose_recommendation(stdscr, profile: Profile, recs):
     if len(recs) == 1:
         return recs[0]
-    labels = [f"{r.model} ({r.metadata.get('confidence', 'unknown')})" for r in recs]
+    labels = [f"{model_label(r.model)} ({r.metadata.get('confidence', 'unknown')})" for r in recs]
     picked = choose_from(stdscr, "Choose best-known params", labels, labels[0], "Multiple recommendations matched this model.")
     if picked not in labels:
         return None
@@ -625,7 +712,9 @@ def confirm_recommendation(stdscr, profile: Profile, rec) -> bool:
 def recommendation_preview_lines(profile: Profile, rec, plan) -> list[str]:
     lines = [
         f"Recommendation: {rec.section}",
-        f"Current model: {profile.model}",
+        f"Recommendation model: {model_label(rec.model)}",
+        f"Current model: {model_label(profile.model)}",
+        f"Path: {profile.model}",
         f"Confidence: {rec.metadata.get('confidence', 'unknown')}",
         "",
         "Summary:",

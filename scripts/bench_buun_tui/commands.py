@@ -83,6 +83,7 @@ def profile_command(profile: Profile, raw_path: Path) -> list[str]:
         "--model", str(model_path),
         "--output", "jsonl",
         "--progress",
+        "--verbose",
     ]
     add_arg(cmd, "--n-depth", profile.depths)
     add_arg(cmd, "--n-prompt", profile.prompt)

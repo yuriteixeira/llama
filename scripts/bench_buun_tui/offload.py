@@ -326,8 +326,11 @@ def estimate_gpu_workspace(profile: Profile, sizing: ModelSizing) -> int:
     batch = first_int(profile.batch_size, 1024)
     ubatch = first_int(profile.ubatch_size, 256)
     activation_scratch = max(batch, ubatch) * embd * 2 * 8
-    graph_workspace = 256 * MIB
-    cuda_workspace = 256 * MIB
+    # These are model-runtime allocations, not generic reserves: llama.cpp/buun
+    # CUDA graph + compute buffers are allocated after weights/KV/RS memory and
+    # can be hundreds of MiB for prompt processing even at modest context.
+    graph_workspace = 512 * MIB
+    cuda_workspace = 512 * MIB
     return int(graph_workspace + cuda_workspace + activation_scratch)
 
 
@@ -340,7 +343,7 @@ def estimate_cpu_runtime(profile: Profile, sizing: ModelSizing) -> int:
 
 
 def query_vram_bytes() -> tuple[int, int | None]:
-    fallback = 8192 * MIB
+    fallback = (7836 - 128) * MIB
     try:
         proc = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total,memory.free", "--format=csv,noheader,nounits"],
@@ -359,7 +362,14 @@ def query_vram_bytes() -> tuple[int, int | None]:
     try:
         total = int(parts[0]) * MIB
         free = int(parts[1]) * MIB if len(parts) > 1 else None
-        return total, free
+        # nvidia-smi reports nominal board memory (8192 MiB on RTX 3070),
+        # while llama.cpp CUDA often reports lower usable VRAM (~7836 MiB).
+        # Use currently free memory as the practical allocation budget on this
+        # headless server, capped by the nominal total.
+        usable = min(total, free) if free is not None else total
+        # Keep a small CUDA allocator slack because llama.cpp may perform late
+        # graph/compute allocations after the main model tensors are placed.
+        return max(0, usable - 128 * MIB), free
     except (TypeError, ValueError):
         return fallback, None
 
@@ -481,7 +491,7 @@ def recommendation_explanations(sizing: ModelSizing, budget: RuntimeBudget, cand
     if not sizing.exact_tensor_sizes:
         lines.extend(sizing.notes)
     lines.append(f"Target context: {budget.desired_context} tokens.")
-    lines.append(f"Estimated GPU total: {format_bytes(candidate.gpu_total_bytes)} / {format_bytes(budget.vram_total_bytes)}.")
+    lines.append(f"Estimated GPU total: {format_bytes(candidate.gpu_total_bytes)} / {format_bytes(budget.vram_total_bytes)} usable VRAM budget.")
     lines.append(f"Estimated RAM total: {format_bytes(candidate.cpu_total_bytes)} / {format_bytes(budget.ram_available_bytes)} MemAvailable.")
     return lines
 

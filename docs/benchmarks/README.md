@@ -36,7 +36,7 @@ scripts/run-llama-bench-matrix.py
 
 Defaults:
 
-- models: `models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf`
+- models: `models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf` (`Qwen3.6-35B-A3B-UD-IQ4_NL.gguf [35B total, A3B active, MoE]`)
 - transports: `curl,pi-blank,pi-current`
 - contexts: `32768,65536,131072,262144`
 - servers: `vanilla,buun`
