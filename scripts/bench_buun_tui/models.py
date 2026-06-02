@@ -204,6 +204,13 @@ def tested_model_identities() -> set[str]:
     return TESTED_MODELS_CACHE
 
 
+def refresh_tested_model_identities() -> set[str]:
+    """Rescan benchmark outputs so UNTESTED labels reflect freshly finished runs."""
+    global TESTED_MODELS_CACHE
+    TESTED_MODELS_CACHE = scan_tested_model_identities()
+    return TESTED_MODELS_CACHE
+
+
 def scan_tested_model_identities() -> set[str]:
     identities: set[str] = set()
     if not RESULT_DIR.exists():

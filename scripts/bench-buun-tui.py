@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from bench_buun_tui.config_store import default_config_path, load_config, remember_config
+from bench_buun_tui.models import refresh_tested_model_identities
 from bench_buun_tui.paths import RESULT_DIR, ROOT
 from bench_buun_tui.process_stream import run_streaming_process
 from bench_buun_tui.report_server import start_report_server
@@ -89,6 +90,8 @@ def run_tui_loop(cfg) -> int:
             print("Running benchmark in a popup. Esc cancels.")
             last_rc = curses.wrapper(run_benchmark_with_popup, path, server.url)
             logging.info("run finished config=%s rc=%s", path, last_rc)
+            tested_count = len(refresh_tested_model_identities())
+            logging.info("refreshed tested model identities: %s", tested_count)
             cfg = load_config(path)
             if prompt_update_ranking(server.url):
                 update_ranking_reports()
