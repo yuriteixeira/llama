@@ -31,9 +31,15 @@ from .models import (
     gpu_layer_options,
     model_description,
     model_detail_brackets,
+    META_CACHE,
+    META_CACHE_FILE,
+    META_CACHE_SIGS,
+    MODELS_LIST_CACHE,
+    model_identities,
     model_label,
     model_metadata,
     model_options,
+    model_path,
 )
 from .offload import OffloadError, calculate_offload, format_bytes
 from .process_stream import StreamStatus
@@ -223,7 +229,7 @@ def handle_main_action(stdscr, state: TuiState):
     elif selected in (6, 7):
         profile_idx = selected - 6
         other_idx = 1 - profile_idx
-        edit_profile(stdscr, state.cfg.profiles[profile_idx], state.models, state.cfg.profiles[other_idx])
+        return edit_profile(stdscr, state.cfg, state.cfg.profiles[profile_idx], state.models, state.cfg.profiles[other_idx])
     elif selected in (8, 9):
         return save_config_action(stdscr, state.cfg, run_after_save=selected == 9)
     elif selected == 10:
@@ -487,6 +493,8 @@ def wrap_lines_for_screen(lines: list[str], width: int) -> list[str]:
 
 
 PROFILE_ACTIONS = {
+    "__run_this_profile": "Save config and run this profile only",
+    "__clear_model": "Delete model from profile/caches/presets",
     "__load_best_known": "Load best-known params for this model",
     "__auto_offload": "Auto-calculate GPU/MoE offload",
     "__smoke_test": "Smoke-test current profile load",
@@ -495,7 +503,7 @@ PROFILE_ACTIONS = {
 }
 
 
-def edit_profile(stdscr, profile: Profile, models: list[str], other_profile: Profile | None = None) -> None:
+def edit_profile(stdscr, cfg: BenchConfig, profile: Profile, models: list[str], other_profile: Profile | None = None) -> Path | bool:
     actions = list(PROFILE_ACTIONS)
     params = [k for k, _ in profile.items()]
     entries = params + actions
@@ -515,9 +523,11 @@ def edit_profile(stdscr, profile: Profile, models: list[str], other_profile: Pro
         elif key == getattr(curses, "KEY_BTAB", -1):
             idx = jump_to_menu_section(idx, profile_editor_section_starts(actions, params), len(entries), -1)
         elif key in (ord("q"), 27):
-            return
+            return False
         elif key in (10, 13):
-            handle_profile_editor_selection(stdscr, profile, entries[idx], models, other_profile)
+            result = handle_profile_editor_selection(stdscr, cfg, profile, entries[idx], models, other_profile)
+            if result is not False:
+                return result
         if idx < len(params):
             scroll = adjust_profile_scroll(idx, scroll, params, visible_rows)
 
@@ -602,6 +612,14 @@ def selected_field_lines(profile: Profile, field: str, width: int) -> list[str]:
 
 
 def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
+    if field == "__run_this_profile":
+        lines = ["Save config and run this profile only", ""]
+        lines.extend(wrap_text(f"Saves the current config with run_profiles={profile.name} and starts a benchmark run immediately after leaving the profile editor.", width))
+        return lines
+    if field == "__clear_model":
+        lines = ["Delete model from profile/caches/presets", ""]
+        lines.extend(wrap_text("Removes the selected model path from this profile, prunes it from the TUI model caches, and removes matching sections from versions/buun/model-presets.ini. Other benchmark parameters are kept unchanged.", width))
+        return lines
     if field == "__load_best_known":
         lines = ["Load best-known params for this model", ""]
         lines.extend(wrap_text(f"Reads {BEST_KNOWN_PARAMS} and applies validated recommendations for the selected model.", width))
@@ -635,23 +653,157 @@ def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
     return [""]
 
 
-def handle_profile_editor_selection(stdscr, profile: Profile, field: str, models: list[str], other_profile: Profile | None = None) -> None:
+def handle_profile_editor_selection(stdscr, cfg: BenchConfig, profile: Profile, field: str, models: list[str], other_profile: Profile | None = None) -> Path | bool:
+    if field == "__run_this_profile":
+        return save_run_single_profile_action(stdscr, cfg, profile)
+    if field == "__clear_model":
+        clear_profile_model_action(stdscr, profile)
+        return False
     if field == "__load_best_known":
         load_best_known_for_profile(stdscr, profile)
-        return
+        return False
     if field == "__auto_offload":
         auto_calculate_offload_for_profile(stdscr, profile)
-        return
+        return False
     if field == "__smoke_test":
         smoke_test_current_profile(stdscr, profile)
-        return
+        return False
     if field == "__copy_from_other":
         copy_from_other_profile(stdscr, profile, other_profile)
-        return
+        return False
     if field == "__show_server_command":
         show_server_command(stdscr, profile)
-        return
+        return False
     edit_profile_field(stdscr, profile, field, models)
+    return False
+
+
+def save_run_single_profile_action(stdscr, cfg: BenchConfig, profile: Profile) -> Path | bool:
+    if not profile.model:
+        show_message(stdscr, f"Select a model for {profile.name} before running it.")
+        return False
+    cfg.run_profiles = profile.name
+    return save_config_action(stdscr, cfg, run_after_save=True)
+
+
+def clear_profile_model_action(stdscr, profile: Profile) -> None:
+    if not profile.model:
+        show_message(stdscr, f"{profile.name} has no selected model.")
+        return
+    old_model = profile.model
+    old_label = model_label(old_model)
+    if show_scroll_text(
+        stdscr,
+        "Delete model from profile/caches/presets?",
+        [
+            f"Profile: {profile.name}",
+            "",
+            f"Current model: {old_label}",
+            "",
+            "This will:",
+            "- clear the model from this profile",
+            "- remove it from bench-results/buun-tui/.cache model caches",
+            "- remove matching sections from versions/buun/model-presets.ini",
+            "",
+            "The GGUF file itself is not deleted. Other profile parameters are kept unchanged.",
+        ],
+        accept_text="Enter delete refs  •  q/Esc cancel",
+    ):
+        profile.model = ""
+        changes = [f"Cleared model from {profile.name}."]
+        changes.extend(remove_model_from_caches(old_model))
+        changes.extend(remove_model_from_buun_presets(old_model))
+        show_scroll_text(stdscr, "Model references removed", changes, accept_text="q/Esc/Enter continue", enter_accepts=True)
+
+
+def remove_model_from_caches(model: str) -> list[str]:
+    identities = model_identities(model)
+    changes: list[str] = []
+    if MODELS_LIST_CACHE.exists():
+        try:
+            data = json.loads(MODELS_LIST_CACHE.read_text())
+            models = data.get("models")
+            if isinstance(models, list):
+                kept = [item for item in models if str(item) not in identities]
+                removed = len(models) - len(kept)
+                if removed:
+                    data["models"] = kept
+                    MODELS_LIST_CACHE.write_text(json.dumps(data, separators=(",", ":")))
+                    changes.append(f"Removed {removed} entr{'y' if removed == 1 else 'ies'} from {MODELS_LIST_CACHE.relative_to(ROOT)}.")
+        except Exception as exc:
+            changes.append(f"Failed to update {MODELS_LIST_CACHE.relative_to(ROOT)}: {exc}")
+    if META_CACHE_FILE.exists():
+        try:
+            data = json.loads(META_CACHE_FILE.read_text())
+            cached_models = data.get("models")
+            if isinstance(cached_models, dict):
+                removed_keys = [key for key in list(cached_models) if key in identities]
+                for key in removed_keys:
+                    cached_models.pop(key, None)
+                    META_CACHE.pop(key, None)
+                    META_CACHE_SIGS.pop(key, None)
+                if removed_keys:
+                    META_CACHE_FILE.write_text(json.dumps(data, separators=(",", ":")))
+                    changes.append(f"Removed {len(removed_keys)} metadata entr{'y' if len(removed_keys) == 1 else 'ies'} from {META_CACHE_FILE.relative_to(ROOT)}.")
+        except Exception as exc:
+            changes.append(f"Failed to update {META_CACHE_FILE.relative_to(ROOT)}: {exc}")
+    return changes or ["No matching TUI cache entries found."]
+
+
+def remove_model_from_buun_presets(model: str) -> list[str]:
+    preset_path = ROOT / "versions" / "buun" / "model-presets.ini"
+    if not preset_path.exists():
+        return [f"Preset file not found: {preset_path.relative_to(ROOT)}."]
+    identities = preset_model_identities(model)
+    lines = preset_path.read_text().splitlines()
+    output: list[str] = []
+    removed_sections: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if is_ini_section_header(line):
+            flush_preset_section(current, output, removed_sections, identities)
+            current = [line]
+        elif current:
+            current.append(line)
+        else:
+            output.append(line)
+    flush_preset_section(current, output, removed_sections, identities)
+    if not removed_sections:
+        return ["No matching sections found in versions/buun/model-presets.ini."]
+    preset_path.write_text("\n".join(output).rstrip() + "\n")
+    names = ", ".join(removed_sections)
+    return [f"Removed {len(removed_sections)} preset section{'s' if len(removed_sections) != 1 else ''} from versions/buun/model-presets.ini: {names}."]
+
+
+def preset_model_identities(model: str) -> set[str]:
+    identities = set(model_identities(model))
+    path = model_path(model)
+    identities.add(str(path))
+    try:
+        identities.add(str(path.resolve()))
+    except OSError:
+        pass
+    return {item.strip() for item in identities if item and item.strip()}
+
+
+def is_ini_section_header(line: str) -> bool:
+    return bool(re.match(r"^\s*\[[^\]]+\]\s*$", line))
+
+
+def flush_preset_section(section_lines: list[str], output: list[str], removed_sections: list[str], identities: set[str]) -> None:
+    if not section_lines:
+        return
+    section_name = section_lines[0].strip()[1:-1].strip()
+    section_model = ""
+    for line in section_lines[1:]:
+        match = re.match(r"^\s*model\s*=\s*(.*?)\s*$", line)
+        if match:
+            section_model = match.group(1)
+            break
+    if section_model and section_model in identities:
+        removed_sections.append(section_name)
+    else:
+        output.extend(section_lines)
 
 
 def auto_calculate_offload_for_profile(stdscr, profile: Profile) -> None:
