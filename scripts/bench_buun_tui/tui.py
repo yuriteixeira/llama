@@ -157,7 +157,9 @@ def handle_main_action(stdscr, state: TuiState):
     elif selected == 2:
         edit_run_prefix_action(stdscr, state)
     elif selected in (3, 4):
-        edit_profile(stdscr, state.cfg.profiles[selected - 3], state.models)
+        profile_idx = selected - 3
+        other_idx = 1 - profile_idx
+        edit_profile(stdscr, state.cfg.profiles[profile_idx], state.models, state.cfg.profiles[other_idx])
     elif selected in (5, 6):
         return save_config_action(stdscr, state.cfg, run_after_save=selected == 6)
     elif selected == 7:
@@ -331,11 +333,12 @@ def wrap_lines_for_screen(lines: list[str], width: int) -> list[str]:
 
 PROFILE_ACTIONS = {
     "__load_best_known": "Load best-known params for this model",
+    "__copy_from_other": "Copy bench params from other profile",
     "__show_server_command": "Show equivalent llama-server command",
 }
 
 
-def edit_profile(stdscr, profile: Profile, models: list[str]) -> None:
+def edit_profile(stdscr, profile: Profile, models: list[str], other_profile: Profile | None = None) -> None:
     fields = list(PROFILE_ACTIONS) + [k for k, _ in profile.items()]
     idx = 0
     while True:
@@ -348,7 +351,7 @@ def edit_profile(stdscr, profile: Profile, models: list[str]) -> None:
         elif key in (ord("q"), 27):
             return
         elif key in (10, 13):
-            handle_profile_editor_selection(stdscr, profile, fields[idx], models)
+            handle_profile_editor_selection(stdscr, profile, fields[idx], models, other_profile)
 
 
 def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int) -> None:
@@ -406,6 +409,12 @@ def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
         lines.append("")
         lines.extend(wrap_text("A preview is shown before values are changed. The profile model itself is kept unchanged.", width))
         return lines
+    if field == "__copy_from_other":
+        lines = ["Copy bench params from other profile", ""]
+        lines.extend(wrap_text("Copies all benchmark/profile parameters from the other profile, but keeps this profile's model unchanged.", width))
+        lines.append("")
+        lines.extend(wrap_text("Useful when comparing two models with identical runtime settings.", width))
+        return lines
     if field == "__show_server_command":
         lines = ["Show equivalent llama-server command", ""]
         lines.extend(wrap_text("Renders the current benchmark profile as a buun llama-server command where fields map cleanly to server flags.", width))
@@ -415,14 +424,52 @@ def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
     return [""]
 
 
-def handle_profile_editor_selection(stdscr, profile: Profile, field: str, models: list[str]) -> None:
+def handle_profile_editor_selection(stdscr, profile: Profile, field: str, models: list[str], other_profile: Profile | None = None) -> None:
     if field == "__load_best_known":
         load_best_known_for_profile(stdscr, profile)
+        return
+    if field == "__copy_from_other":
+        copy_from_other_profile(stdscr, profile, other_profile)
         return
     if field == "__show_server_command":
         show_server_command(stdscr, profile)
         return
     edit_profile_field(stdscr, profile, field, models)
+
+
+def copy_from_other_profile(stdscr, profile: Profile, other_profile: Profile | None) -> None:
+    if other_profile is None:
+        show_message(stdscr, "No other profile available to copy from.")
+        return
+    if confirm_copy_from_other_profile(stdscr, profile, other_profile):
+        copied = copy_profile_params(profile, other_profile)
+        show_message(stdscr, f"Copied {len(copied)} params from {other_profile.name}; kept model unchanged.")
+
+
+def confirm_copy_from_other_profile(stdscr, profile: Profile, other_profile: Profile) -> bool:
+    lines = [
+        f"Copy bench params from {other_profile.name} to {profile.name}?",
+        "",
+        f"Current model kept: {profile.model}",
+        f"Source model ignored: {other_profile.model}",
+        "",
+        "Changes:",
+    ]
+    for key in copy_profile_param_keys(profile):
+        lines.append(f"  {key}: {getattr(profile, key)} -> {getattr(other_profile, key)}")
+    lines.extend(["", "Press Enter to copy these params, or q/Esc to cancel."])
+    return show_scroll_text(stdscr, "Copy bench params?", lines, accept_text="Enter copy  •  q/Esc cancel")
+
+
+def copy_profile_params(profile: Profile, other_profile: Profile) -> list[str]:
+    keys = copy_profile_param_keys(profile)
+    for key in keys:
+        setattr(profile, key, getattr(other_profile, key))
+    return keys
+
+
+def copy_profile_param_keys(profile: Profile) -> list[str]:
+    return [key for key, _ in profile.items() if key != "model"]
 
 
 def load_best_known_for_profile(stdscr, profile: Profile) -> None:
