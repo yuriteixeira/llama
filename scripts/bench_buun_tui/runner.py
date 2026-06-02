@@ -96,7 +96,21 @@ def enrich_row(profile, row: dict) -> None:
     row["profile"] = profile.name
     row["model"] = profile.model
     row["cache_strategy"] = profile.cache_strategy
+    row["repetitions"] = profile.repetitions
+    row["wall_s"] = infer_wall_s(row, profile.repetitions)
     row.setdefault("flash_attn", profile.flash_attn if is_set(profile.flash_attn) else "")
+
+
+def infer_wall_s(row: dict, repetitions: str | int | None) -> float | None:
+    avg_ns = row.get("avg_ns")
+    try:
+        avg_ns_f = float(avg_ns)
+        reps = int(repetitions) if repetitions not in (None, "", "unset") else 1
+        if avg_ns_f > 0 and reps > 0:
+            return round(avg_ns_f * reps / 1e9, 3)
+    except Exception:
+        pass
+    return None
 
 
 def append_live_summary(row: dict, live_summary: Path) -> None:

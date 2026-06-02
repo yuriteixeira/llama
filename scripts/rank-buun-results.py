@@ -52,6 +52,10 @@ SUMMARY_FIELDS = [
     "remaining_moe_layers",
     "pp_tps",
     "tg_tps",
+    "pp_wall_s",
+    "tg_wall_s",
+    "wall_s",
+    "repetitions",
     "normalized_pp",
     "normalized_tg",
     "score",
@@ -91,6 +95,10 @@ class Sample:
     tg_tps: float | None = None
     pp_stddev: float | None = None
     tg_stddev: float | None = None
+    pp_wall_s: float | None = None
+    tg_wall_s: float | None = None
+    wall_s: float | None = None
+    repetitions: int | None = None
     sample_count: int = 1
     config_key: str = ""
     normalized_pp: float | None = None
@@ -117,6 +125,7 @@ class ConfigAggregate:
     remaining_moe_layers: int | None
     pp_values: list[float]
     tg_values: list[float]
+    wall_values: list[float]
     scores: list[float]
     sample_count: int
 
@@ -246,6 +255,10 @@ def build_paired_samples(rows: list[dict[str, Any]]) -> list[Sample]:
             continue
         pp_stddev_vals = [v for v in (parse_float(r.get("stddev_ts")) for r in pp_rows) if v is not None]
         tg_stddev_vals = [v for v in (parse_float(r.get("stddev_ts")) for r in tg_rows) if v is not None]
+        pp_wall_vals = [infer_row_wall_s(r) for r in pp_rows if infer_row_wall_s(r) is not None]
+        tg_wall_vals = [infer_row_wall_s(r) for r in tg_rows if infer_row_wall_s(r) is not None]
+        pp_wall_s = median(pp_wall_vals) if pp_wall_vals else None
+        tg_wall_s = median(tg_wall_vals) if tg_wall_vals else None
         samples.append(
             Sample(
                 run_dir=key.run_dir,
@@ -269,6 +282,10 @@ def build_paired_samples(rows: list[dict[str, Any]]) -> list[Sample]:
                 tg_tps=median(tg_vals),
                 pp_stddev=median(pp_stddev_vals) if pp_stddev_vals else None,
                 tg_stddev=median(tg_stddev_vals) if tg_stddev_vals else None,
+                pp_wall_s=pp_wall_s,
+                tg_wall_s=tg_wall_s,
+                wall_s=(pp_wall_s + tg_wall_s) if (pp_wall_s is not None and tg_wall_s is not None) else (pp_wall_s if pp_wall_s is not None else tg_wall_s),
+                repetitions=parse_int(rep.get("repetitions")),
                 sample_count=min(len(pp_vals), len(tg_vals)),
                 config_key=key.config_key,
             )
@@ -314,10 +331,12 @@ def score_samples(samples: list[Sample], score_mode: str) -> list[Sample]:
     for depth, items in by_depth.items():
         best_pp = max((s.pp_tps or 0.0) for s in items) or 1.0
         best_tg = max((s.tg_tps or 0.0) for s in items) or 1.0
+        best_wall = min((s.wall_s for s in items if s.wall_s is not None and s.wall_s > 0), default=None)
         for sample in items:
             sample.normalized_pp = (sample.pp_tps or 0.0) / best_pp if best_pp else 0.0
             sample.normalized_tg = (sample.tg_tps or 0.0) / best_tg if best_tg else 0.0
-            sample.score = math.sqrt(max(sample.normalized_pp, 0.0) * max(sample.normalized_tg, 0.0))
+            normalized_wall = (best_wall / sample.wall_s) if best_wall and sample.wall_s and sample.wall_s > 0 else 0.0
+            sample.score = math.pow(max(sample.normalized_pp, 0.0) * max(sample.normalized_tg, 0.0) * max(normalized_wall, 0.0), 1.0 / 3.0)
             ranked.append(sample)
     return sorted(ranked, key=lambda s: (s.score or 0.0, s.pp_tps or 0.0, s.tg_tps or 0.0), reverse=True)
 
@@ -345,6 +364,7 @@ def rank_overall(samples: list[Sample], min_samples: int, score_mode: str) -> li
                 remaining_moe_layers=sample.remaining_moe_layers,
                 pp_values=[],
                 tg_values=[],
+                wall_values=[],
                 scores=[],
                 sample_count=0,
             )
@@ -353,13 +373,15 @@ def rank_overall(samples: list[Sample], min_samples: int, score_mode: str) -> li
             agg.pp_values.append(sample.pp_tps)
         if sample.tg_tps is not None:
             agg.tg_values.append(sample.tg_tps)
+        if sample.wall_s is not None:
+            agg.wall_values.append(sample.wall_s)
         if sample.score is None:
             # score_samples() mutates the samples used by the depth ranking.
             # Recompute on demand here to keep overall ranking independent.
             if score_mode == "simple-geomean":
                 sample.score = math.sqrt(max(sample.pp_tps or 0.0, 0.0) * max(sample.tg_tps or 0.0, 0.0))
             else:
-                sample.score = 0.0
+                sample.score = math.pow(max(sample.pp_tps or 0.0, 0.0) * max(sample.tg_tps or 0.0, 0.0), 0.5)
         agg.scores.append(sample.score or 0.0)
         agg.sample_count += 1
 
@@ -410,6 +432,10 @@ def rows_to_csv_rows(samples: list[Sample], score_mode: str) -> list[dict[str, A
                 "remaining_moe_layers": sample.remaining_moe_layers,
                 "pp_tps": sample.pp_tps,
                 "tg_tps": sample.tg_tps,
+                "pp_wall_s": sample.pp_wall_s,
+                "tg_wall_s": sample.tg_wall_s,
+                "wall_s": sample.wall_s,
+                "repetitions": sample.repetitions,
                 "normalized_pp": sample.normalized_pp,
                 "normalized_tg": sample.normalized_tg,
                 "score": sample.score,
@@ -425,6 +451,7 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
     lines.append(f"Input: `{input_dir}`  ")
     lines.append(f"Paired samples: {len(paired_samples)}  ")
     lines.append(f"Score mode: `{args.score}`  ")
+    lines.append("Wall time is part of the normalized score and is measured as elapsed benchmark-process time for each paired PP/TG sample.")
     lines.append("")
 
     lines.append("## Overall Winner")
@@ -436,6 +463,7 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
             f"Config: {format_config_inline(winner)}",
             f"Median PP TPS: `{fmt_num(median(winner.pp_values))}`",
             f"Median TG TPS: `{fmt_num(median(winner.tg_values))}`",
+            f"Median wall time: `{fmt_num(median_or_none(winner.wall_values))}`",
             f"Median score: `{fmt_num(median(winner.scores))}`",
             f"Samples: `{winner.sample_count}`",
             "",
@@ -451,41 +479,51 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
 
     lines.append("## Top Overall Rankings")
     lines.append("")
-    lines.append("| Rank | Model | Score | PP TPS | TG TPS | Samples | Config |")
-    lines.append("|---:|---|---:|---:|---:|---:|---|")
+    lines.append("| Rank | Model | Score | PP TPS | TG TPS | Wall | Samples | Config |")
+    lines.append("|---:|---|---:|---:|---:|---:|---:|---|")
     for rank, agg in enumerate(overall[:5], start=1):
         lines.append(
-            f"| {rank} | `{display_model_label(agg.model, agg.model_path)}` | {fmt_num(median(agg.scores))} | {fmt_num(median(agg.pp_values))} | {fmt_num(median(agg.tg_values))} | `{agg.sample_count}` | {format_config_inline(agg)} |"
+            f"| {rank} | `{display_model_label(agg.model, agg.model_path)}` | {fmt_num(median(agg.scores))} | {fmt_num(median(agg.pp_values))} | {fmt_num(median(agg.tg_values))} | {fmt_num(median_or_none(agg.wall_values))} | `{agg.sample_count}` | {format_config_inline(agg)} |"
+        )
+    lines.append("")
+
+    lines.append("## Fastest Overall by Wall Time")
+    lines.append("")
+    lines.append("| Rank | Model | Wall | PP TPS | TG TPS | Score | Samples | Config |")
+    lines.append("|---:|---|---:|---:|---:|---:|---:|---|")
+    for rank, agg in enumerate(sorted(overall, key=lambda a: (median_or_none(a.wall_values) if a.wall_values else float('inf'), -(median_or_none(a.scores) or 0.0)))[:5], start=1):
+        lines.append(
+            f"| {rank} | `{display_model_label(agg.model, agg.model_path)}` | {fmt_num(median_or_none(agg.wall_values))} | {fmt_num(median(agg.pp_values))} | {fmt_num(median(agg.tg_values))} | {fmt_num(median(agg.scores))} | `{agg.sample_count}` | {format_config_inline(agg)} |"
         )
     lines.append("")
 
     lines.append("## Winners by Context Depth")
     lines.append("")
-    lines.append("| Depth | Rank | Model | PP TPS | TG TPS | Score | Run | Profile |")
-    lines.append("|---:|---:|---|---:|---:|---:|---|---|")
+    lines.append("| Depth | Rank | Model | PP TPS | TG TPS | Wall | Score | Run | Profile |")
+    lines.append("|---:|---:|---|---:|---:|---:|---:|---|---|")
     for depth in sorted(depth_best):
         sample = depth_best[depth]
         lines.append(
-            f"| {depth} | 1 | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.pp_tps)} | {fmt_num(sample.tg_tps)} | {fmt_num(sample.score)} | `{sample.run_dir}` | `{sample.profile}` |"
+            f"| {depth} | 1 | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.pp_tps)} | {fmt_num(sample.tg_tps)} | {fmt_num(sample.wall_s)} | {fmt_num(sample.score)} | `{sample.run_dir}` | `{sample.profile}` |"
         )
     lines.append("")
 
     lines.append("## Best PP-only by Depth")
     lines.append("")
-    lines.append("| Depth | Model | PP TPS | Run | Profile |")
-    lines.append("|---:|---|---:|---|---|")
+    lines.append("| Depth | Model | PP TPS | Wall | Run | Profile |")
+    lines.append("|---:|---|---:|---:|---|---|")
     for depth in sorted(pp_best):
         sample = pp_best[depth]
-        lines.append(f"| {depth} | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.pp_tps)} | `{sample.run_dir}` | `{sample.profile}` |")
+        lines.append(f"| {depth} | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.pp_tps)} | {fmt_num(sample.pp_wall_s)} | `{sample.run_dir}` | `{sample.profile}` |")
     lines.append("")
 
     lines.append("## Best TG-only by Depth")
     lines.append("")
-    lines.append("| Depth | Model | TG TPS | Run | Profile |")
-    lines.append("|---:|---|---:|---|---|")
+    lines.append("| Depth | Model | TG TPS | Wall | Run | Profile |")
+    lines.append("|---:|---|---:|---:|---|---|")
     for depth in sorted(tg_best):
         sample = tg_best[depth]
-        lines.append(f"| {depth} | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.tg_tps)} | `{sample.run_dir}` | `{sample.profile}` |")
+        lines.append(f"| {depth} | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.tg_tps)} | {fmt_num(sample.tg_wall_s)} | `{sample.run_dir}` | `{sample.profile}` |")
     lines.append("")
 
     lines.append("## Untested Models")
@@ -626,6 +664,17 @@ def parse_float(value: Any) -> float | None:
         return None
 
 
+def infer_row_wall_s(row: dict[str, Any]) -> float | None:
+    wall_s = parse_float(row.get("wall_s"))
+    if wall_s and wall_s > 0:
+        return wall_s
+    avg_ns = parse_float(row.get("avg_ns"))
+    reps = parse_int(row.get("repetitions")) or 1
+    if avg_ns is not None and avg_ns > 0 and reps > 0:
+        return avg_ns * reps / 1e9
+    return None
+
+
 def normalize_bool_text(value: Any) -> str:
     text = str(value).strip().lower()
     if text in {"1", "true", "yes", "on"}:
@@ -649,6 +698,10 @@ def fmt_num(value: float | int | None) -> str:
     if isinstance(value, int):
         return str(value)
     return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def median_or_none(values: list[float]) -> float | None:
+    return median(values) if values else None
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -722,6 +775,7 @@ def render_html(
             f"<p><b>Config:</b> <code>{esc(format_config_inline(winner))}</code></p>"
             f"<p><b>Median PP TPS:</b> <code>{esc(fmt_num(median(winner.pp_values)))}</code> "
             f"<b>Median TG TPS:</b> <code>{esc(fmt_num(median(winner.tg_values)))}</code> "
+            f"<b>Median wall time:</b> <code>{esc(fmt_num(median_or_none(winner.wall_values)))}</code> "
             f"<b>Median score:</b> <code>{esc(fmt_num(median(winner.scores)))}</code> "
             f"<b>Samples:</b> <code>{winner.sample_count}</code></p>"
             f"<pre>{esc(command)}</pre>"
@@ -729,10 +783,12 @@ def render_html(
     else:
         overall_block = "<p>No overall winner found.</p>"
 
-    overall_rows = [[rank, aggregate_model_cell(agg), fmt_num(median(agg.scores)), fmt_num(median(agg.pp_values)), fmt_num(median(agg.tg_values)), agg.sample_count, format_config_inline(agg)] for rank, agg in enumerate(overall[:5], start=1)]
-    depth_rows = [[depth, 1, model_cell(sample), fmt_num(sample.pp_tps), fmt_num(sample.tg_tps), fmt_num(sample.score), sample.run_dir, sample.profile] for depth, sample in sorted(depth_best.items())]
-    pp_rows = [[depth, model_cell(sample), fmt_num(sample.pp_tps), sample.run_dir, sample.profile] for depth, sample in sorted(pp_best.items())]
-    tg_rows = [[depth, model_cell(sample), fmt_num(sample.tg_tps), sample.run_dir, sample.profile] for depth, sample in sorted(tg_best.items())]
+    overall_rows = [[rank, aggregate_model_cell(agg), fmt_num(median(agg.scores)), fmt_num(median(agg.pp_values)), fmt_num(median(agg.tg_values)), fmt_num(median_or_none(agg.wall_values)), agg.sample_count, format_config_inline(agg)] for rank, agg in enumerate(overall[:5], start=1)]
+    wall_ranked = sorted(overall, key=lambda a: (median_or_none(a.wall_values) if a.wall_values else float('inf'), -(median_or_none(a.scores) or 0.0)))
+    wall_rows = [[rank, aggregate_model_cell(agg), fmt_num(median_or_none(agg.wall_values)), fmt_num(median(agg.pp_values)), fmt_num(median(agg.tg_values)), fmt_num(median(agg.scores)), agg.sample_count, format_config_inline(agg)] for rank, agg in enumerate(wall_ranked[:5], start=1)]
+    depth_rows = [[depth, 1, model_cell(sample), fmt_num(sample.pp_tps), fmt_num(sample.tg_tps), fmt_num(sample.wall_s), fmt_num(sample.score), sample.run_dir, sample.profile] for depth, sample in sorted(depth_best.items())]
+    pp_rows = [[depth, model_cell(sample), fmt_num(sample.pp_tps), fmt_num(sample.pp_wall_s), sample.run_dir, sample.profile] for depth, sample in sorted(pp_best.items())]
+    tg_rows = [[depth, model_cell(sample), fmt_num(sample.tg_tps), fmt_num(sample.tg_wall_s), sample.run_dir, sample.profile] for depth, sample in sorted(tg_best.items())]
     untested_rows = [[model] for model in untested_models]
 
     body = [
@@ -755,6 +811,7 @@ def render_html(
         "</script></head><body>",
         "<h1>Buun Benchmark Ranking</h1>",
         f"<p class='muted'>Input: <code>{esc(input_dir)}</code> · Paired samples: <code>{len(paired_samples)}</code> · Score: <code>{esc(args.score)}</code> · {links}</p>",
+        "<p class='muted'>Wall time is part of the normalized score and is measured as elapsed benchmark-process time for each paired PP/TG sample.</p>",
     ]
     if message:
         body.append(f"<p>{esc(message)}</p>")
@@ -762,13 +819,15 @@ def render_html(
         "<h2>Overall Winner</h2>",
         overall_block,
         "<h2>Top Overall Rankings</h2>",
-        table(["Rank", "Model", "Score", "PP TPS", "TG TPS", "Samples", "Config"], overall_rows),
+        table(["Rank", "Model", "Score", "PP TPS", "TG TPS", "Wall", "Samples", "Config"], overall_rows),
+        "<h2>Fastest Overall by Wall Time</h2>",
+        table(["Rank", "Model", "Wall", "PP TPS", "TG TPS", "Score", "Samples", "Config"], wall_rows),
         "<h2>Winners by Context Depth</h2>",
-        table(["Depth", "Rank", "Model", "PP TPS", "TG TPS", "Score", "Run", "Profile"], depth_rows),
+        table(["Depth", "Rank", "Model", "PP TPS", "TG TPS", "Wall", "Score", "Run", "Profile"], depth_rows),
         "<h2>Best PP-only by Depth</h2>",
-        table(["Depth", "Model", "PP TPS", "Run", "Profile"], pp_rows),
+        table(["Depth", "Model", "PP TPS", "Wall", "Run", "Profile"], pp_rows),
         "<h2>Best TG-only by Depth</h2>",
-        table(["Depth", "Model", "TG TPS", "Run", "Profile"], tg_rows),
+        table(["Depth", "Model", "TG TPS", "Wall", "Run", "Profile"], tg_rows),
         "<h2>Untested Models</h2>",
         (f"<p>Untested models under <code>models/</code>: <code>{len(untested_models)}</code></p>" if untested_models else "<p>All models under <code>models/</code> have been tested.</p>"),
         table(["Model"], untested_rows),

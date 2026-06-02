@@ -87,7 +87,7 @@ SUMMARY_FIELDS = [
     "profile", "model", "model_path", "cache_strategy", "test", "n_depth", "n_prompt", "n_gen",
     "n_batch", "n_ubatch", "n_threads", "n_cpu_moe", "n_gpu_layers", "flash_attn",
     "model_layers", "cpu_moe_layers", "remaining_moe_layers",
-    "type_k", "type_v", "avg_ts", "stddev_ts", "avg_ns",
+    "type_k", "type_v", "repetitions", "avg_ts", "stddev_ts", "avg_ns", "wall_s",
 ]
 
 
