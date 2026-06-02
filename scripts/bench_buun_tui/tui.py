@@ -222,14 +222,17 @@ def run_best_known_research_with_popup(stdscr, models: list[str] | None = None) 
 
 
 def append_output_lines(lines: list[str], chunk: str) -> None:
-    parts = chunk.replace("\r", "").split("\n")
-    if len(parts) == 1:
-        lines[-1] = lines[-1] + parts[0]
+    """Append streamed stdout while preserving newline boundaries.
+
+    `run_streaming_process()` usually delivers chunks that end in `\n`. Keep the
+    trailing empty split item as the current in-progress line so the next chunk
+    starts on a new popup row instead of being concatenated to the previous one.
+    """
+    if not chunk:
         return
+    parts = chunk.replace("\r", "").split("\n")
     lines[-1] = lines[-1] + parts[0]
     lines.extend(parts[1:])
-    if lines and lines[-1] == "":
-        lines.pop()
     del lines[:-500]
 
 
