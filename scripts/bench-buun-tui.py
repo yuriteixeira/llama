@@ -11,10 +11,11 @@ import sys
 from pathlib import Path
 
 from bench_buun_tui.config_store import default_config_path, load_config, remember_config
+from bench_buun_tui.paths import RESULT_DIR, ROOT
+from bench_buun_tui.process_stream import run_streaming_process
 from bench_buun_tui.report_server import start_report_server
-from bench_buun_tui.paths import RESULT_DIR
 from bench_buun_tui.runner import run_config
-from bench_buun_tui.tui import tui_main
+from bench_buun_tui.tui import append_output_lines, draw_output_popup, popup_cancel_requested, stream_footer, show_scroll_text, tui_main
 
 RANK_SCRIPT = Path(__file__).with_name("rank-buun-results.py")
 
@@ -24,6 +25,10 @@ def main() -> int:
     setup_logging(args.log_file)
     logging.info("bench-buun-tui starting args=%s", args)
     if args.config and args.run:
+        if args.no_server:
+            rc = run_config(args.config)
+            logging.info("run finished config=%s rc=%s", args.config, rc)
+            return rc
         server = start_report_server()
         logging.info("report server started root=%s url=%s", server.root, server.url)
         print(f"Serving benchmark reports from {server.root}: {server.url}")
@@ -41,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="saved INI config to load")
     parser.add_argument("--run", action="store_true", help="run the saved config without opening the TUI")
+    parser.add_argument("--no-server", action="store_true", help="do not start the report server (used by the popup runner)")
     parser.add_argument("--log-file", type=Path, default=RESULT_DIR / "bench-buun-tui.log", help="TUI log file")
     return parser.parse_args()
 
@@ -80,8 +86,8 @@ def run_tui_loop(cfg) -> int:
                 return last_rc
             logging.info("saved config from TUI: %s", path)
             print(f"Saved config: {path}")
-            print("Running benchmark outside the TUI. This may take a long time. Progress will print below.")
-            last_rc = run_config(path)
+            print("Running benchmark in a popup. Esc cancels.")
+            last_rc = curses.wrapper(run_benchmark_with_popup, path, server.url)
             logging.info("run finished config=%s rc=%s", path, last_rc)
             cfg = load_config(path)
             if prompt_update_ranking(server.url):
@@ -91,6 +97,43 @@ def run_tui_loop(cfg) -> int:
     finally:
         logging.info("stopping report server")
         server.stop()
+
+
+def run_benchmark_with_popup(stdscr, config_path: Path, report_url: str) -> int:
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--config", str(config_path), "--run", "--no-server"]
+    output_lines = [f"Starting benchmark for {config_path.name}", f"Reports: {report_url}"]
+    stdscr.nodelay(True)
+    try:
+        def on_output(chunk: str) -> None:
+            append_output_lines(output_lines, chunk)
+            draw_output_popup(stdscr, "Running benchmark", output_lines, "Streaming... Esc cancels")
+
+        def on_heartbeat(status) -> None:
+            draw_output_popup(stdscr, "Running benchmark", output_lines, stream_footer("benchmark", status))
+
+        def cancel_check() -> bool:
+            return popup_cancel_requested(stdscr)
+
+        draw_output_popup(stdscr, "Running benchmark", output_lines, "Starting benchmark... Esc cancels")
+        result = run_streaming_process(
+            cmd,
+            cwd=ROOT,
+            on_output=on_output,
+            on_heartbeat=on_heartbeat,
+            cancel_check=cancel_check,
+            total_timeout=None,
+            idle_timeout=None,
+        )
+        lines = [f"Benchmark command: {subprocess.list2cmdline(cmd)}", f"Return code: {result.returncode}", f"Elapsed: {result.elapsed_seconds:.1f}s"]
+        if result.reason:
+            lines.append(f"Reason: {result.reason}")
+        metric_tail = [line.rstrip() for line in result.output.splitlines() if line.strip()][-20:]
+        if metric_tail:
+            lines.extend(["", "Output:", *metric_tail])
+        show_scroll_text(stdscr, "Benchmark result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+        return result.returncode
+    finally:
+        stdscr.nodelay(False)
 
 
 def prompt_update_ranking(report_url: str) -> bool:

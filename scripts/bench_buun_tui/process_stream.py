@@ -27,6 +27,7 @@ class StreamResult:
     command: list[str]
     returncode: int
     output: str
+    elapsed_seconds: float
     reason: str = ""
     timed_out: bool = False
     idle_timed_out: bool = False
@@ -137,6 +138,7 @@ def run_streaming_process(
         command=cmd,
         returncode=returncode,
         output=output,
+        elapsed_seconds=time.monotonic() - started,
         reason=reason,
         timed_out=timed_out,
         idle_timed_out=idle_timed_out,

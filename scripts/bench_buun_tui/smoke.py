@@ -16,6 +16,7 @@ class SmokeTestResult:
     command: list[str]
     returncode: int
     output: str
+    elapsed_seconds: float
     reason: str = ""
     timed_out: bool = False
     idle_timed_out: bool = False
@@ -70,6 +71,7 @@ def run_smoke_test(
         command=result.command,
         returncode=result.returncode,
         output=result.output,
+        elapsed_seconds=result.elapsed_seconds,
         reason=result.reason,
         timed_out=result.timed_out,
         idle_timed_out=result.idle_timed_out,

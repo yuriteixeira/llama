@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import curses
+import json
 import logging
 import shlex
 import time
@@ -662,6 +663,38 @@ def smoke_test_output_tail(output: str, max_lines: int = 40) -> list[str]:
     return lines[-max_lines:]
 
 
+def smoke_test_last_row(output: str) -> dict | None:
+    for line in reversed(output.splitlines()):
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            row = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            return row
+    return None
+
+
+def smoke_test_metric_lines(result) -> list[str]:
+    row = smoke_test_last_row(result.output)
+    lines: list[str] = []
+    if isinstance(row, dict):
+        avg_ts = row.get("avg_ts")
+        avg_ns = row.get("avg_ns")
+        if avg_ts is not None:
+            lines.append(f"Benchmark throughput: {float(avg_ts):.3f} tok/s")
+        if avg_ns is not None:
+            try:
+                lines.append(f"Benchmark wall: {float(avg_ns) / 1e9:.3f}s")
+            except (TypeError, ValueError):
+                pass
+    if getattr(result, "elapsed_seconds", None) is not None:
+        lines.append(f"Process wall: {float(result.elapsed_seconds):.3f}s")
+    return lines
+
+
 def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_context: int) -> bool:
     if not profile.model:
         show_message(stdscr, "Select a model before running a smoke test.")
@@ -699,12 +732,20 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
                 )
                 if result.timed_out or result.idle_timed_out or result.cancelled:
                     reason = result.reason or ("cancelled" if result.cancelled else "timed out")
-                    lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Reason: {reason}", "", "Output:"]
+                    lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Reason: {reason}"]
+                    metric_lines = smoke_test_metric_lines(result)
+                    if metric_lines:
+                        lines.extend(["", *metric_lines])
+                    lines.extend(["", "Output:"])
                     if result.output.strip():
                         lines.extend(result.output.strip().splitlines())
                     show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
                     return False
-            lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Diagnosis: {diagnosis}", "", "Output:"]
+            lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Diagnosis: {diagnosis}"]
+            metric_lines = smoke_test_metric_lines(result)
+            if metric_lines:
+                lines.extend(["", *metric_lines])
+            lines.extend(["", "Output:"])
             if output_tail:
                 lines.extend(output_tail)
             if result.passed:

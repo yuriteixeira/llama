@@ -317,9 +317,9 @@ def run_research_process(
     )
     if json_mode:
         if result.returncode == 0 and not ''.join(assistant_output).strip():
-            return StreamResult(command=result.command, returncode=result.returncode, output=''.join(raw_output), reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
-        return StreamResult(command=result.command, returncode=result.returncode, output=''.join(assistant_output) or ''.join(raw_output), reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
-    return StreamResult(command=result.command, returncode=result.returncode, output=''.join(assistant_output), reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
+            return StreamResult(command=result.command, returncode=result.returncode, output=''.join(raw_output), elapsed_seconds=result.elapsed_seconds, reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
+        return StreamResult(command=result.command, returncode=result.returncode, output=''.join(assistant_output) or ''.join(raw_output), elapsed_seconds=result.elapsed_seconds, reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
+    return StreamResult(command=result.command, returncode=result.returncode, output=''.join(assistant_output), elapsed_seconds=result.elapsed_seconds, reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
 
 
 def parse_json_stream_event(line: str) -> dict | None:
