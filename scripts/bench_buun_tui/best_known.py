@@ -27,7 +27,6 @@ NUMERIC_LIST_FIELDS = {
     "gpu_layers",
     "prompt",
     "gen",
-    "repetitions",
 }
 RESEARCH_FIELDS = {
     "model_name",
@@ -42,6 +41,7 @@ RESEARCH_FIELDS = {
     "confidence",
     "references",
     "depths",
+    "repetitions",
 }
 
 
@@ -312,7 +312,7 @@ Return ONLY an INI document. Do not include prose outside the INI. Use one secti
 
 Allowed auto-applied profile fields: {profile_fields}
 Allowed cache_strategy values: {caches}
-Do not include depths as a recommended parameter; depths is only for benchmark sweeps and must not be changed by best-known params.
+Do not include depths or repetitions as recommended parameters; depths is only for benchmark sweeps and repetitions set by this TUI.
 Recommend one best-known value per field, not a list of possible values. Use a single integer for numeric fields. Use unset when a parameter should not be passed.
 Include research_summary, confidence, references, architecture, quantization, is_mtp, is_reap, supports_moe, active_params when knowable.
 
@@ -377,7 +377,6 @@ def fallback_recommendation(model: str) -> dict[str, str]:
         "gpu_layers": "unset",
         "prompt": "512",
         "gen": "128",
-        "repetitions": "1",
         "warmup": "false",
         "device": "CUDA0",
         "flash_attn": "1",
