@@ -7,6 +7,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from .models import find_models, model_metadata, model_path
 from .paths import CONFIG_DIR, ROOT
@@ -55,6 +56,29 @@ class ApplyPlan:
     applied: dict[str, str]
     skipped: dict[str, str]
     invalid: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ResearchRun:
+    path: Path
+    command: str
+    response: str
+
+
+class ResearchError(RuntimeError):
+    def __init__(self, message: str, command: str, response: str, returncode: int | None = None):
+        super().__init__(message)
+        self.command = command
+        self.response = response
+        self.returncode = returncode
+
+
+def load_research_meta(path: Path = BEST_KNOWN_PARAMS) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(path)
+    return dict(cp["meta"]) if "meta" in cp else {}
 
 
 def load_recommendations(path: Path = BEST_KNOWN_PARAMS) -> list[Recommendation]:
@@ -140,21 +164,48 @@ def validate_field(key: str, value: str) -> str:
 
 
 def generate_best_known_params(path: Path = BEST_KNOWN_PARAMS) -> Path:
+    return run_best_known_research(path).path
+
+
+def run_best_known_research(path: Path = BEST_KNOWN_PARAMS, on_output: Callable[[str], None] | None = None) -> ResearchRun:
     models = find_models()
     prompt = build_research_prompt(models)
     cmd = ["pi", "-p", prompt]
-    output = subprocess.check_output(cmd, cwd=ROOT, text=True, stderr=subprocess.STDOUT)
-    cp = parse_research_output(output)
+    command = shlex.join(cmd)
+    output = run_research_command(cmd, command, on_output)
+    try:
+        cp = parse_research_output(output)
+    except Exception as exc:
+        raise ResearchError(f"Failed to parse pi response as INI: {exc}", command, output) from exc
     cp["meta"] = {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "source": shlex.join(["pi", "-p", prompt.replace("\n", "\\n")]),
+        "source": command,
+        "response": output,
         "schema_version": SCHEMA_VERSION,
     }
     ensure_sections_for_models(cp, models)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
         cp.write(f)
-    return path
+    return ResearchRun(path=path, command=command, response=output)
+
+
+def run_research_command(cmd: list[str], command: str, on_output: Callable[[str], None] | None = None) -> str:
+    try:
+        proc = subprocess.Popen(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+    except Exception as exc:
+        raise ResearchError(f"Failed to start pi research: {exc}", command, "") from exc
+    output_parts: list[str] = []
+    assert proc.stdout is not None
+    for chunk in proc.stdout:
+        output_parts.append(chunk)
+        if on_output:
+            on_output(chunk)
+    returncode = proc.wait()
+    output = "".join(output_parts)
+    if returncode != 0:
+        raise ResearchError(f"pi research exited with status {returncode}", command, output, returncode)
+    return output
 
 
 def build_research_prompt(models: list[str]) -> str:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from bench_buun_tui.best_known import BEST_KNOWN_PARAMS, build_research_prompt, generate_best_known_params
+from bench_buun_tui.best_known import BEST_KNOWN_PARAMS, ResearchError, build_research_prompt, run_best_known_research
 from bench_buun_tui.models import find_models
 
 
@@ -20,9 +20,21 @@ def main() -> int:
         print(build_research_prompt(find_models()))
         return 0
 
-    path = generate_best_known_params(args.output)
-    print(f"Saved best-known params: {path}")
+    try:
+        run = run_best_known_research(args.output, on_output=print_stream_chunk)
+    except ResearchError as exc:
+        print(f"\nResearch errored: {exc}" + (f" (status {exc.returncode})" if exc.returncode is not None else ""))
+        print(f"Command ran:\n{exc.command}\n")
+        print(f"Response:\n{exc.response.rstrip()}\n")
+        return 1
+    print(f"\nCommand ran:\n{run.command}\n")
+    print(f"Response:\n{run.response.rstrip()}\n")
+    print(f"Saved best-known params: {run.path}")
     return 0
+
+
+def print_stream_chunk(chunk: str) -> None:
+    print(chunk, end="", flush=True)
 
 
 if __name__ == "__main__":

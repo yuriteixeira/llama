@@ -9,10 +9,12 @@ from pathlib import Path
 
 from .best_known import (
     BEST_KNOWN_PARAMS,
+    ResearchError,
     apply_recommendation,
     build_apply_plan,
     find_recommendations,
-    generate_best_known_params,
+    load_research_meta,
+    run_best_known_research,
 )
 from .commands import profile_server_command
 from .config_store import find_saved_configs, load_config, remember_config, save_config, slugify
@@ -161,13 +163,77 @@ def handle_main_action(stdscr, state: TuiState):
 
 
 def research_best_known_action(stdscr) -> None:
-    show_status(stdscr, "Researching best-known params with pi -p...", "This may take a while. The TUI will continue when pi finishes.")
+    run_best_known_research_with_popup(stdscr)
+
+
+def run_best_known_research_with_popup(stdscr) -> bool:
+    output_lines = ["Starting pi -p research..."]
+
+    def on_output(chunk: str) -> None:
+        append_output_lines(output_lines, chunk)
+        draw_output_popup(stdscr, "Researching best-known params", output_lines, "Streaming pi output... wait for completion")
+
+    draw_output_popup(stdscr, "Researching best-known params", output_lines, "Starting pi -p...")
     try:
-        path = generate_best_known_params()
+        run = run_best_known_research(on_output=on_output)
+    except ResearchError as exc:
+        lines = research_result_lines(
+            saved_path=None,
+            command=exc.command,
+            response=exc.response,
+            error=f"{exc}" + (f" (status {exc.returncode})" if exc.returncode is not None else ""),
+        )
+        show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+        return False
     except Exception as exc:
-        show_message(stdscr, f"Failed to generate best-known params: {exc}")
+        lines = research_result_lines(saved_path=None, command="pi -p <research prompt>", response="\n".join(output_lines), error=str(exc))
+        show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+        return False
+    lines = research_result_lines(saved_path=run.path, command=run.command, response=run.response)
+    show_scroll_text(stdscr, "Best-known params research result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+    return True
+
+
+def append_output_lines(lines: list[str], chunk: str) -> None:
+    parts = chunk.replace("\r", "").split("\n")
+    if len(parts) == 1:
+        lines[-1] = lines[-1] + parts[0]
         return
-    show_message(stdscr, f"Saved best-known params: {path}")
+    lines[-1] = lines[-1] + parts[0]
+    lines.extend(parts[1:])
+    if lines and lines[-1] == "":
+        lines.pop()
+    del lines[:-500]
+
+
+def draw_output_popup(stdscr, title: str, lines: list[str], footer: str) -> None:
+    stdscr.clear()
+    rows, cols = screen_size()
+    height = max(8, min(rows - 2, rows * 3 // 4))
+    width = max(40, min(cols - 4, cols * 4 // 5))
+    top = max(0, (rows - height) // 2)
+    left = max(0, (cols - width) // 2)
+    win = curses.newwin(height, width, top, left)
+    win.box()
+    safe_addstr(win, 0, 2, f" {title} "[: max(0, width - 4)], curses.A_BOLD)
+    body_height = max(1, height - 4)
+    body_width = max(1, width - 4)
+    visible = wrap_lines_for_screen(lines, body_width)[-body_height:]
+    for row, line in enumerate(visible, start=1):
+        safe_addstr(win, row, 2, line[:body_width])
+    safe_addstr(win, height - 2, 2, footer[:body_width])
+    stdscr.refresh()
+    win.refresh()
+
+
+def research_result_lines(saved_path: Path | None, command: str, response: str, error: str = "") -> list[str]:
+    lines = []
+    if error:
+        lines.extend(["Research errored:", error, ""])
+    if saved_path:
+        lines.extend([f"Saved best-known params: {saved_path}", ""])
+    lines.extend(["Command ran:", command or "(unknown)", "", "Response:", response.strip() or "(empty response)"])
+    return lines
 
 
 def show_status(stdscr, title: str, detail: str = "") -> None:
@@ -361,7 +427,13 @@ def load_best_known_for_profile(stdscr, profile: Profile) -> None:
         return
     recs = find_recommendations(profile.model)
     if not recs:
-        show_message(stdscr, f"No recommendation found in {BEST_KNOWN_PARAMS}")
+        if not confirm_research_missing_recommendation(stdscr, profile):
+            return
+        if not run_best_known_research_with_popup(stdscr):
+            return
+        recs = find_recommendations(profile.model)
+    if not recs:
+        show_message(stdscr, f"Research completed, but no recommendation matched {profile.model} in {BEST_KNOWN_PARAMS}")
         return
     rec = choose_recommendation(stdscr, profile, recs)
     if rec is None:
@@ -369,6 +441,18 @@ def load_best_known_for_profile(stdscr, profile: Profile) -> None:
     if confirm_recommendation(stdscr, profile, rec):
         plan = apply_recommendation(profile, rec)
         show_message(stdscr, f"Applied {len(plan.applied)} params from {rec.section}.")
+
+
+def confirm_research_missing_recommendation(stdscr, profile: Profile) -> bool:
+    lines = [
+        "No saved recommendation matched this model.",
+        "",
+        f"Model: {profile.model}",
+        f"Recommendation file: {BEST_KNOWN_PARAMS}",
+        "",
+        "Press Enter to run pi -p research now and watch the output live.",
+    ]
+    return show_scroll_text(stdscr, "Research best-known params now?", lines, accept_text="Enter research  •  q/Esc cancel")
 
 
 def choose_recommendation(stdscr, profile: Profile, recs):
@@ -411,6 +495,15 @@ def recommendation_preview_lines(profile: Profile, rec, plan) -> list[str]:
     refs = rec.metadata.get("references")
     if refs:
         lines.extend(["", "References:", refs])
+    research_meta = load_research_meta()
+    command = research_meta.get("source")
+    response = research_meta.get("response")
+    if command or response:
+        lines.extend(["", "pi -p research run:"])
+        if command:
+            lines.extend(["  Command ran:", command])
+        if response:
+            lines.extend(["", "  Response:", response.strip() or "(empty response)"])
     lines.extend(["", "Press Enter to apply these valid params, or q/Esc to cancel."])
     return lines
 
