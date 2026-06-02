@@ -98,13 +98,13 @@ class OffloadRecommendation:
     explanations: list[str]
 
 
-def calculate_offload(profile: Profile, desired_context: int | None = None) -> OffloadRecommendation:
+def calculate_offload(profile: Profile, desired_context: int | None = None, vram_budget_bytes: int | None = None) -> OffloadRecommendation:
     if not profile.model:
         raise OffloadError("Select a model before auto-calculating offload.")
     sizing = read_model_sizing(profile.model)
     if sizing.block_count <= 0:
         raise OffloadError("Could not read a valid GGUF block/layer count for this model.")
-    budget = runtime_budget(profile, sizing, desired_context)
+    budget = runtime_budget(profile, sizing, desired_context, vram_budget_bytes)
     candidates = build_candidates(sizing, budget)
     if not candidates:
         raise OffloadError("Could not build any offload candidates for this model.")
@@ -264,7 +264,12 @@ def is_expert_tensor_name(name: str) -> bool:
     return any(marker in lowered for marker in EXPERT_TENSOR_MARKERS)
 
 
-def runtime_budget(profile: Profile, sizing: ModelSizing, desired_context_override: int | None = None) -> RuntimeBudget:
+def runtime_budget(
+    profile: Profile,
+    sizing: ModelSizing,
+    desired_context_override: int | None = None,
+    vram_budget_bytes: int | None = None,
+) -> RuntimeBudget:
     desired_context = desired_context_override if desired_context_override and desired_context_override > 0 else desired_context_size(profile, sizing)
     k_bytes, v_bytes = KV_BYTES_BY_STRATEGY.get(profile.cache_strategy, KV_BYTES_BY_STRATEGY["unset"])
     key_len = sizing.key_length or infer_length_from_embedding(sizing)
@@ -273,6 +278,8 @@ def runtime_budget(profile: Profile, sizing: ModelSizing, desired_context_overri
     gpu_workspace = estimate_gpu_workspace(profile, sizing)
     cpu_runtime = estimate_cpu_runtime(profile, sizing)
     vram_total, vram_free = query_vram_bytes()
+    if vram_budget_bytes and vram_budget_bytes > 0:
+        vram_total = vram_budget_bytes
     ram_available = query_mem_available_bytes()
     return RuntimeBudget(
         desired_context=desired_context,

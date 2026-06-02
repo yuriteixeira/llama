@@ -16,7 +16,7 @@ from .best_known import (
     load_research_meta,
     run_best_known_research,
 )
-from .commands import profile_command, profile_server_command
+from .commands import profile_server_command
 from .config_store import find_saved_configs, load_config, remember_config, save_config, slugify
 from .models import (
     choose_default_model,
@@ -25,11 +25,14 @@ from .models import (
     model_description,
     model_detail_brackets,
     model_label,
+    model_metadata,
     model_options,
 )
 from .offload import OffloadError, calculate_offload, format_bytes
+from .repair import diagnose_failure, next_repair_step
 from .paths import CONFIG_DIR
 from .profile import BenchConfig, CACHE_STRATEGIES, FIELD_DESCRIPTIONS, PRESETS, Profile
+from .smoke import run_smoke_test, smoke_test_command, smoke_test_context
 
 
 def new_default_config(models: list[str]) -> BenchConfig:
@@ -487,7 +490,7 @@ def auto_calculate_offload_for_profile(stdscr, profile: Profile) -> None:
         profile.n_cpu_moe = rec.n_cpu_moe
         show_message(stdscr, f"Applied gpu_layers={rec.gpu_layers}, n_cpu_moe={rec.n_cpu_moe}.")
         if show_scroll_text(stdscr, "Smoke-test now?", ["Run a brief load test with the updated profile right now?", "", f"Context: {desired_context} tokens", f"Model: {model_label(profile.model)}"], accept_text="Enter run smoke test  •  q/Esc skip"):
-            run_smoke_test_with_popup(stdscr, profile, desired_context=desired_context)
+            run_smoke_test_and_repair_with_popup(stdscr, profile, desired_context=desired_context)
 
 
 def smoke_test_current_profile(stdscr, profile: Profile) -> None:
@@ -496,7 +499,7 @@ def smoke_test_current_profile(stdscr, profile: Profile) -> None:
         return
     desired_context = smoke_test_context(profile)
     if show_scroll_text(stdscr, "Smoke-test current profile?", smoke_test_preview_lines(profile, desired_context), accept_text="Enter run smoke test  •  q/Esc cancel"):
-        run_smoke_test_with_popup(stdscr, profile, desired_context=desired_context)
+        run_smoke_test_and_repair_with_popup(stdscr, profile, desired_context=desired_context)
 
 
 def default_offload_context(profile: Profile) -> str:
@@ -561,11 +564,6 @@ def auto_offload_preview_lines(profile: Profile, rec) -> list[str]:
     return lines
 
 
-def smoke_test_context(profile: Profile) -> int:
-    vals = [int(part.strip()) for part in profile.depths.split(",") if part.strip().isdigit()]
-    return max(vals) if vals else 512
-
-
 def smoke_test_preview_lines(profile: Profile, desired_context: int) -> list[str]:
     return [
         "Smoke-test current profile load",
@@ -585,42 +583,54 @@ def smoke_test_preview_lines(profile: Profile, desired_context: int) -> list[str
     ]
 
 
-def run_smoke_test_with_popup(stdscr, profile: Profile, desired_context: int) -> bool:
+def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_context: int) -> bool:
     if not profile.model:
         show_message(stdscr, "Select a model before running a smoke test.")
         return False
-    test_profile = copy.deepcopy(profile)
-    test_profile.depths = str(desired_context)
-    test_profile.prompt = "0"
-    test_profile.gen = "1"
-    test_profile.repetitions = "1"
-    test_profile.warmup = "false"
-    cmd = profile_command(test_profile, Path("smoke-test.jsonl"))
-    cmd_text = shlex.join(cmd)
-    output_lines = [f"Starting smoke test with: {cmd_text}"]
+    tried: set[tuple[str, str]] = set()
+    while True:
+        output_lines = [f"Starting smoke test for {model_label(profile.model)}"]
 
-    def on_output(chunk: str) -> None:
-        append_output_lines(output_lines, chunk)
-        draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Streaming llama-bench output... wait for completion")
+        def on_output(chunk: str) -> None:
+            append_output_lines(output_lines, chunk)
+            draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Streaming llama-bench output... wait for completion")
 
-    draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Starting smoke test...")
-    import subprocess
+        draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Starting smoke test...")
+        result = run_smoke_test(profile, desired_context, on_output=on_output)
+        cmd_text = shlex.join(result.command)
+        diagnosis = diagnose_failure(result.output)
+        lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Diagnosis: {diagnosis}", "", "Output:"]
+        if result.output.strip():
+            lines.extend(result.output.strip().splitlines())
+        if result.passed:
+            lines.extend(["", "Smoke test passed."])
+            show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+            return True
+        lines.extend(["", f"Smoke test failed ({diagnosis})."])
+        step = next_repair_step(profile, smoke_test_block_count(profile), smoke_test_supports_moe(profile), diagnosis, tried)
+        if step is None:
+            show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+            return False
+        lines.extend(["", f"Next repair step: {step.label}", f"  gpu_layers -> {step.gpu_layers}", f"  n_cpu_moe -> {step.n_cpu_moe}"])
+        if not show_scroll_text(stdscr, "Smoke test result", lines, accept_text="Enter apply repair  •  q/Esc stop", enter_accepts=False):
+            return False
+        tried.add((profile.gpu_layers, profile.n_cpu_moe))
+        profile.gpu_layers = step.gpu_layers
+        profile.n_cpu_moe = step.n_cpu_moe
 
-    proc = subprocess.Popen(cmd, cwd=Path(__file__).resolve().parents[2], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
-    assert proc.stdout is not None
-    try:
-        for chunk in proc.stdout:
-            on_output(chunk)
-    finally:
-        returncode = proc.wait()
-    lines = [f"Smoke test command: {cmd_text}", f"Return code: {returncode}", "", "Output:"]
-    lines.extend(output_lines[1:])
-    if returncode == 0:
-        lines.extend(["", "Smoke test passed."])
-    else:
-        lines.extend(["", "Smoke test failed."])
-    show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
-    return returncode == 0
+
+def smoke_test_block_count(profile: Profile) -> int:
+    meta = model_metadata(profile.model)
+    block_count = meta.get("block_count")
+    return int(block_count) if isinstance(block_count, int) and block_count > 0 else 40
+
+
+def smoke_test_supports_moe(profile: Profile) -> bool | None:
+    meta = model_metadata(profile.model)
+    haystack = f"{profile.model} {meta.get('name', '')} {meta.get('architecture', '')}".lower()
+    if any(token in haystack for token in ["moe", "mixtral", "qwen3moe", "qwen35moe", "a3b"]):
+        return True
+    return False
 
 
 def copy_from_other_profile(stdscr, profile: Profile, other_profile: Profile | None) -> None:
