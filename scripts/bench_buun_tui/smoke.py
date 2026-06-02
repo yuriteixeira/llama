@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import copy
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from .commands import profile_command
 from .paths import ROOT
+from .process_stream import StreamResult, StreamStatus, run_streaming_process
 from .profile import Profile
 
 
@@ -16,6 +16,10 @@ class SmokeTestResult:
     command: list[str]
     returncode: int
     output: str
+    reason: str = ""
+    timed_out: bool = False
+    idle_timed_out: bool = False
+    cancelled: bool = False
 
     @property
     def passed(self) -> bool:
@@ -46,38 +50,28 @@ def run_smoke_test(
     desired_context: int,
     on_output: Callable[[str], None] | None = None,
     timeout: int | None = None,
+    idle_timeout: int | None = 120,
+    on_heartbeat: Callable[[StreamStatus], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    heartbeat_interval: float = 1.0,
 ) -> SmokeTestResult:
     cmd = smoke_test_command(profile, desired_context)
-    if on_output is None:
-        try:
-            completed = subprocess.run(
-                cmd,
-                cwd=ROOT,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                check=False,
-            )
-            return SmokeTestResult(command=cmd, returncode=completed.returncode, output=completed.stdout or "")
-        except subprocess.TimeoutExpired as exc:
-            output = exc.stdout or ""
-            if isinstance(output, bytes):
-                output = output.decode(errors="replace")
-            output += f"\nSmoke test timed out after {timeout} seconds.\n"
-            return SmokeTestResult(command=cmd, returncode=124, output=output)
-
-    proc = subprocess.Popen(
+    result: StreamResult = run_streaming_process(
         cmd,
         cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
+        on_output=on_output,
+        on_heartbeat=on_heartbeat,
+        cancel_check=cancel_check,
+        total_timeout=timeout,
+        idle_timeout=idle_timeout,
+        heartbeat_interval=heartbeat_interval,
     )
-    output_parts: list[str] = []
-    assert proc.stdout is not None
-    for chunk in proc.stdout:
-        output_parts.append(chunk)
-        on_output(chunk)
-    return SmokeTestResult(command=cmd, returncode=proc.wait(), output="".join(output_parts))
+    return SmokeTestResult(
+        command=result.command,
+        returncode=result.returncode,
+        output=result.output,
+        reason=result.reason,
+        timed_out=result.timed_out,
+        idle_timed_out=result.idle_timed_out,
+        cancelled=result.cancelled,
+    )

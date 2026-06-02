@@ -29,6 +29,7 @@ from .models import (
     model_options,
 )
 from .offload import OffloadError, calculate_offload, format_bytes
+from .process_stream import StreamStatus
 from .repair import diagnose_failure, next_repair_step
 from .paths import CONFIG_DIR
 from .profile import BenchConfig, CACHE_STRATEGIES, FIELD_DESCRIPTIONS, PRESETS, Profile
@@ -46,15 +47,17 @@ def new_default_config(models: list[str]) -> BenchConfig:
 
 def tui_main(stdscr, cfg: BenchConfig | None = None, report_url: str = "") -> Path | None:
     curses.curs_set(0)
-    state = TuiState(cfg or new_default_config(find_models()), report_url)
+    draw_loading_screen(stdscr, "Loading Buun TUI", "Scanning model files...")
+    models = find_models()
+    state = TuiState(cfg or new_default_config(models), report_url, models)
     return main_menu(stdscr, state)
 
 
 class TuiState:
-    def __init__(self, cfg: BenchConfig, report_url: str = ""):
+    def __init__(self, cfg: BenchConfig, report_url: str = "", models: list[str] | None = None):
         self.cfg = cfg
         self.report_url = report_url
-        self.models = find_models()
+        self.models = models or find_models()
         self.selected = 0
         self.actions = [
             "Load saved config",
@@ -179,30 +182,39 @@ def research_best_known_action(stdscr) -> None:
 def run_best_known_research_with_popup(stdscr, models: list[str] | None = None) -> bool:
     scope = f" for {model_label(models[0])}" if models and len(models) == 1 else " for all models"
     output_lines = [f"Starting pi streaming research{scope} with: pi --mode json <research prompt>"]
-
-    def on_output(chunk: str) -> None:
-        append_output_lines(output_lines, chunk)
-        draw_output_popup(stdscr, "Researching best-known params", output_lines, "Streaming pi output... wait for completion")
-
-    draw_output_popup(stdscr, "Researching best-known params", output_lines, "Starting pi --mode json...")
+    stdscr.nodelay(True)
     try:
-        run = run_best_known_research(on_output=on_output, stream=True, models=models)
-    except ResearchError as exc:
-        lines = research_result_lines(
-            saved_path=None,
-            command=exc.command,
-            response=exc.response,
-            error=f"{exc}" + (f" (status {exc.returncode})" if exc.returncode is not None else ""),
-        )
-        show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
-        return False
-    except Exception as exc:
-        lines = research_result_lines(saved_path=None, command="pi --mode json <research prompt>", response="\n".join(output_lines), error=str(exc))
-        show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
-        return False
-    lines = research_result_lines(saved_path=run.path, command=run.command, response=run.response)
-    show_scroll_text(stdscr, "Best-known params research result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
-    return True
+        def on_output(chunk: str) -> None:
+            append_output_lines(output_lines, chunk)
+            draw_output_popup(stdscr, "Researching best-known params", output_lines, "Streaming... Esc cancels")
+
+        def on_heartbeat(status: StreamStatus) -> None:
+            draw_output_popup(stdscr, "Researching best-known params", output_lines, stream_footer("pi", status, cancel_hint=True))
+
+        def cancel_check() -> bool:
+            return popup_cancel_requested(stdscr)
+
+        draw_output_popup(stdscr, "Researching best-known params", output_lines, "Starting pi --mode json... Esc cancels")
+        try:
+            run = run_best_known_research(on_output=on_output, stream=True, models=models, on_heartbeat=on_heartbeat, cancel_check=cancel_check)
+        except ResearchError as exc:
+            lines = research_result_lines(
+                saved_path=None,
+                command=exc.command,
+                response=exc.response,
+                error=f"{exc}" + (f" (status {exc.returncode})" if exc.returncode is not None else ""),
+            )
+            show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+            return False
+        except Exception as exc:
+            lines = research_result_lines(saved_path=None, command="pi --mode json <research prompt>", response="\n".join(output_lines), error=str(exc))
+            show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+            return False
+        lines = research_result_lines(saved_path=run.path, command=run.command, response=run.response)
+        show_scroll_text(stdscr, "Best-known params research result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+        return True
+    finally:
+        stdscr.nodelay(False)
 
 
 def append_output_lines(lines: list[str], chunk: str) -> None:
@@ -237,6 +249,33 @@ def draw_output_popup(stdscr, title: str, lines: list[str], footer: str) -> None
     win.refresh()
 
 
+def popup_cancel_requested(stdscr) -> bool:
+    while True:
+        key = stdscr.getch()
+        if key == -1:
+            return False
+        if key in (27, 3, ord("q")):
+            return True
+
+
+def stream_footer(label: str, status: StreamStatus, cancel_hint: bool = True) -> str:
+    parts = [f"{label}: {int(status.elapsed_seconds)}s elapsed"]
+    if status.idle_seconds >= 3:
+        parts.append(f"no output for {int(status.idle_seconds)}s")
+    if cancel_hint:
+        parts.append("Esc cancel")
+    return " • ".join(parts)
+
+
+def smoke_footer(status: StreamStatus, cancel_hint: bool = True) -> str:
+    parts = [f"Running... {int(status.elapsed_seconds)}s elapsed"]
+    if status.idle_seconds >= 3:
+        parts.append(f"No output for {int(status.idle_seconds)}s, still waiting")
+    if cancel_hint:
+        parts.append("Esc cancel")
+    return " • ".join(parts)
+
+
 def research_result_lines(saved_path: Path | None, command: str, response: str, error: str = "") -> list[str]:
     lines = []
     if error:
@@ -252,6 +291,14 @@ def show_status(stdscr, title: str, detail: str = "") -> None:
     stdscr.addstr(0, 0, title[: curses.COLS - 1])
     if detail:
         stdscr.addstr(2, 0, detail[: curses.COLS - 1])
+    stdscr.refresh()
+
+
+def draw_loading_screen(stdscr, title: str, detail: str) -> None:
+    stdscr.clear()
+    rows, cols = screen_size()
+    safe_addstr(stdscr, max(0, rows // 2 - 1), max(0, (cols - len(title)) // 2), title, curses.A_BOLD)
+    safe_addstr(stdscr, max(0, rows // 2 + 1), max(0, (cols - len(detail)) // 2), detail)
     stdscr.refresh()
 
 
@@ -293,6 +340,7 @@ def save_config_action(stdscr, cfg: BenchConfig, run_after_save: bool) -> Path |
 
 
 def show_message(stdscr, message: str) -> None:
+    stdscr.nodelay(False)
     stdscr.clear()
     stdscr.addstr(0, 0, message[: curses.COLS - 1])
     stdscr.addstr(2, 0, "Press any key")
@@ -300,6 +348,7 @@ def show_message(stdscr, message: str) -> None:
 
 
 def show_scroll_text(stdscr, title: str, lines: list[str], accept_text: str, enter_accepts: bool = False) -> bool:
+    stdscr.nodelay(False)
     top = 0
     while True:
         stdscr.clear()
@@ -348,8 +397,11 @@ PROFILE_ACTIONS = {
 def edit_profile(stdscr, profile: Profile, models: list[str], other_profile: Profile | None = None) -> None:
     fields = list(PROFILE_ACTIONS) + [k for k, _ in profile.items()]
     idx = 0
+    scroll = 0
     while True:
-        draw_profile_editor(stdscr, profile, fields, idx)
+        layout = profile_editor_layout()
+        visible_rows = layout["fields"].inner_height - 1 if len(fields) > layout["fields"].inner_height else layout["fields"].inner_height
+        draw_profile_editor(stdscr, profile, fields, idx, scroll)
         key = stdscr.getch()
         if key in (curses.KEY_UP, ord("k")):
             idx = (idx - 1) % len(fields)
@@ -359,13 +411,14 @@ def edit_profile(stdscr, profile: Profile, models: list[str], other_profile: Pro
             return
         elif key in (10, 13):
             handle_profile_editor_selection(stdscr, profile, fields[idx], models, other_profile)
+        scroll = adjust_profile_scroll(idx, scroll, fields, visible_rows)
 
 
-def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int) -> None:
+def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int, scroll: int) -> None:
     stdscr.clear()
     layout = profile_editor_layout()
     draw_profile_editor_header(stdscr, layout["header"], profile)
-    draw_profile_fields_panel(stdscr, layout["fields"], profile, fields, idx)
+    draw_profile_fields_panel(stdscr, layout["fields"], profile, fields, idx, scroll)
     draw_selected_field_panel(stdscr, layout["details"], profile, fields[idx])
     draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Enter edit  •  q/Esc back")
 
@@ -376,16 +429,34 @@ def draw_profile_editor_header(stdscr, panel: "Panel", profile: Profile) -> None
     write_in_panel(stdscr, panel, 1, f"cache={profile.cache_strategy} depths={profile.depths}")
 
 
-def draw_profile_fields_panel(stdscr, panel: "Panel", profile: Profile, fields: list[str], idx: int) -> None:
+def draw_profile_fields_panel(stdscr, panel: "Panel", profile: Profile, fields: list[str], idx: int, scroll: int) -> None:
     draw_panel(stdscr, panel, "Parameters")
-    for i, key in enumerate(fields[: panel.inner_height]):
-        attr = curses.A_REVERSE if i == idx else curses.A_NORMAL
+    indicator_needed = len(fields) > panel.inner_height
+    visible_rows = panel.inner_height - 1 if indicator_needed else panel.inner_height
+    start = max(0, min(scroll, max(0, len(fields) - visible_rows)))
+    visible = fields[start : start + visible_rows]
+    for row, key in enumerate(visible):
+        field_idx = start + row
+        attr = curses.A_REVERSE if field_idx == idx else curses.A_NORMAL
         if key in PROFILE_ACTIONS:
-            write_in_panel(stdscr, panel, i, f"▶ {PROFILE_ACTIONS[key]}", attr)
+            write_in_panel(stdscr, panel, row, f"▶ {PROFILE_ACTIONS[key]}", attr)
             continue
         value = getattr(profile, key)
         shown = model_label(value) if key == "model" and value else value
-        write_in_panel(stdscr, panel, i, f"{key:15} {shown}", attr)
+        write_in_panel(stdscr, panel, row, f"{key:15} {shown}", attr)
+    if indicator_needed:
+        indicator = f"{start + 1}-{min(len(fields), start + visible_rows)}/{len(fields)}"
+        write_in_panel(stdscr, panel, panel.inner_height - 1, indicator.rjust(panel.inner_width), curses.A_DIM)
+
+
+def adjust_profile_scroll(idx: int, scroll: int, fields: list[str], window_size: int) -> int:
+    if len(fields) <= window_size:
+        return 0
+    if idx < scroll:
+        return idx
+    if idx >= scroll + window_size:
+        return idx - window_size + 1
+    return max(0, min(scroll, len(fields) - window_size))
 
 
 def draw_selected_field_panel(stdscr, panel: "Panel", profile: Profile, field: str) -> None:
@@ -588,35 +659,53 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
         show_message(stdscr, "Select a model before running a smoke test.")
         return False
     tried: set[tuple[str, str]] = set()
-    while True:
-        output_lines = [f"Starting smoke test for {model_label(profile.model)}"]
+    stdscr.nodelay(True)
+    try:
+        while True:
+            output_lines = [f"Starting smoke test for {model_label(profile.model)}"]
 
-        def on_output(chunk: str) -> None:
-            append_output_lines(output_lines, chunk)
-            draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Streaming llama-bench output... wait for completion")
+            def on_output(chunk: str) -> None:
+                append_output_lines(output_lines, chunk)
+                draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Streaming... Esc cancels")
 
-        draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Starting smoke test...")
-        result = run_smoke_test(profile, desired_context, on_output=on_output)
-        cmd_text = shlex.join(result.command)
-        diagnosis = diagnose_failure(result.output)
-        lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Diagnosis: {diagnosis}", "", "Output:"]
-        if result.output.strip():
-            lines.extend(result.output.strip().splitlines())
-        if result.passed:
-            lines.extend(["", "Smoke test passed."])
-            show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
-            return True
-        lines.extend(["", f"Smoke test failed ({diagnosis})."])
-        step = next_repair_step(profile, smoke_test_block_count(profile), smoke_test_supports_moe(profile), diagnosis, tried)
-        if step is None:
-            show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
-            return False
-        lines.extend(["", f"Next repair step: {step.label}", f"  gpu_layers -> {step.gpu_layers}", f"  n_cpu_moe -> {step.n_cpu_moe}"])
-        if not show_scroll_text(stdscr, "Smoke test result", lines, accept_text="Enter apply repair  •  q/Esc stop", enter_accepts=False):
-            return False
-        tried.add((profile.gpu_layers, profile.n_cpu_moe))
-        profile.gpu_layers = step.gpu_layers
-        profile.n_cpu_moe = step.n_cpu_moe
+            def on_heartbeat(status: StreamStatus) -> None:
+                draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, smoke_footer(status))
+
+            def cancel_check() -> bool:
+                return popup_cancel_requested(stdscr)
+
+            draw_output_popup(stdscr, "Smoke-testing current profile", output_lines, "Starting smoke test... Esc cancels")
+            result = run_smoke_test(profile, desired_context, on_output=on_output, timeout=1800, idle_timeout=180, on_heartbeat=on_heartbeat, cancel_check=cancel_check)
+            cmd_text = shlex.join(result.command)
+            diagnosis = diagnose_failure(result.output)
+            if not result.passed:
+                if result.timed_out or result.idle_timed_out or result.cancelled:
+                    reason = result.reason or ("cancelled" if result.cancelled else "timed out")
+                    lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Reason: {reason}", "", "Output:"]
+                    if result.output.strip():
+                        lines.extend(result.output.strip().splitlines())
+                    show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+                    return False
+            lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Diagnosis: {diagnosis}", "", "Output:"]
+            if result.output.strip():
+                lines.extend(result.output.strip().splitlines())
+            if result.passed:
+                lines.extend(["", "Smoke test passed."])
+                show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+                return True
+            lines.extend(["", f"Smoke test failed ({diagnosis})."])
+            step = next_repair_step(profile, smoke_test_block_count(profile), smoke_test_supports_moe(profile), diagnosis, tried)
+            if step is None:
+                show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+                return False
+            lines.extend(["", f"Next repair step: {step.label}", f"  gpu_layers -> {step.gpu_layers}", f"  n_cpu_moe -> {step.n_cpu_moe}"])
+            if not show_scroll_text(stdscr, "Smoke test result", lines, accept_text="Enter apply repair  •  q/Esc stop", enter_accepts=False):
+                return False
+            tried.add((profile.gpu_layers, profile.n_cpu_moe))
+            profile.gpu_layers = step.gpu_layers
+            profile.n_cpu_moe = step.n_cpu_moe
+    finally:
+        stdscr.nodelay(False)
 
 
 def smoke_test_block_count(profile: Profile) -> int:
@@ -861,6 +950,7 @@ def draw_options_panel(stdscr, panel: "Panel", options: list[str], idx: int) -> 
 
 
 def prompt_text(stdscr, title: str, initial: str, description: str = "") -> str:
+    stdscr.nodelay(False)
     value = list(initial)
     pos = len(value)
     curses.curs_set(1)

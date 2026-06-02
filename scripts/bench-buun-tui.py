@@ -80,6 +80,7 @@ def run_tui_loop(cfg) -> int:
                 return last_rc
             logging.info("saved config from TUI: %s", path)
             print(f"Saved config: {path}")
+            print("Running benchmark outside the TUI. This may take a long time. Progress will print below.")
             last_rc = run_config(path)
             logging.info("run finished config=%s rc=%s", path, last_rc)
             cfg = load_config(path)

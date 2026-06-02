@@ -4,7 +4,6 @@ import configparser
 import json
 import re
 import shlex
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Callable
 
 from .models import find_models, model_metadata, model_path
 from .paths import CONFIG_DIR, ROOT
+from .process_stream import StreamResult, StreamStatus, run_streaming_process
 from .profile import CACHE_STRATEGIES, Profile
 
 BEST_KNOWN_PARAMS = CONFIG_DIR / "best-known-params.ini"
@@ -174,12 +174,35 @@ def run_best_known_research(
     on_output: Callable[[str], None] | None = None,
     stream: bool = False,
     models: list[str] | None = None,
+    timeout: int | None = 7200,
+    idle_timeout: int | None = 300,
+    on_heartbeat: Callable[[StreamStatus], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    heartbeat_interval: float = 1.0,
 ) -> ResearchRun:
     models = models or find_models()
     prompt = build_research_prompt(models)
     cmd = ["pi", "--mode", "json", prompt] if stream else ["pi", "-p", prompt]
     command = shlex.join(cmd)
-    output = run_research_command_json(cmd, command, on_output) if stream else run_research_command(cmd, command, on_output)
+    output = run_research_command_json(
+        cmd,
+        command,
+        on_output,
+        timeout=timeout,
+        idle_timeout=idle_timeout,
+        on_heartbeat=on_heartbeat,
+        cancel_check=cancel_check,
+        heartbeat_interval=heartbeat_interval,
+    ) if stream else run_research_command(
+        cmd,
+        command,
+        on_output,
+        timeout=timeout,
+        idle_timeout=idle_timeout,
+        on_heartbeat=on_heartbeat,
+        cancel_check=cancel_check,
+        heartbeat_interval=heartbeat_interval,
+    )
     try:
         cp = parse_research_output(output)
     except Exception as exc:
@@ -197,52 +220,106 @@ def run_best_known_research(
     return ResearchRun(path=path, command=command, response=output)
 
 
-def run_research_command(cmd: list[str], command: str, on_output: Callable[[str], None] | None = None) -> str:
-    try:
-        proc = subprocess.Popen(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
-    except Exception as exc:
-        raise ResearchError(f"Failed to start pi research: {exc}", command, "") from exc
-    output_parts: list[str] = []
-    assert proc.stdout is not None
-    for chunk in proc.stdout:
-        output_parts.append(chunk)
-        if on_output:
-            on_output(chunk)
-    returncode = proc.wait()
-    output = "".join(output_parts)
-    if returncode != 0:
-        raise ResearchError(f"pi research exited with status {returncode}", command, output, returncode)
-    return output
+def run_research_command(
+    cmd: list[str],
+    command: str,
+    on_output: Callable[[str], None] | None = None,
+    timeout: int | None = 7200,
+    idle_timeout: int | None = 300,
+    on_heartbeat: Callable[[StreamStatus], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    heartbeat_interval: float = 1.0,
+) -> str:
+    result = run_research_process(
+        cmd,
+        command,
+        on_output=on_output,
+        timeout=timeout,
+        idle_timeout=idle_timeout,
+        on_heartbeat=on_heartbeat,
+        cancel_check=cancel_check,
+        heartbeat_interval=heartbeat_interval,
+    )
+    if result.returncode != 0:
+        raise ResearchError(f"pi research exited with status {result.returncode}", command, result.output, result.returncode)
+    return result.output
 
 
-def run_research_command_json(cmd: list[str], command: str, on_output: Callable[[str], None] | None = None) -> str:
-    try:
-        proc = subprocess.Popen(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
-    except Exception as exc:
-        raise ResearchError(f"Failed to start pi research: {exc}", command, "") from exc
-    output_parts: list[str] = []
-    raw_parts: list[str] = []
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        raw_parts.append(line)
-        event = parse_json_stream_event(line)
-        delta = extract_json_stream_delta(event)
-        if delta:
-            output_parts.append(delta)
+def run_research_command_json(
+    cmd: list[str],
+    command: str,
+    on_output: Callable[[str], None] | None = None,
+    timeout: int | None = 7200,
+    idle_timeout: int | None = 300,
+    on_heartbeat: Callable[[StreamStatus], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    heartbeat_interval: float = 1.0,
+) -> str:
+    result = run_research_process(
+        cmd,
+        command,
+        on_output=on_output,
+        timeout=timeout,
+        idle_timeout=idle_timeout,
+        on_heartbeat=on_heartbeat,
+        cancel_check=cancel_check,
+        heartbeat_interval=heartbeat_interval,
+        json_mode=True,
+    )
+    if result.returncode != 0:
+        raise ResearchError(f"pi research exited with status {result.returncode}", command, result.output, result.returncode)
+    if not result.output.strip():
+        raise ResearchError("pi JSON stream completed without assistant text output", command, result.output, result.returncode)
+    return result.output
+
+
+def run_research_process(
+    cmd: list[str],
+    command: str,
+    on_output: Callable[[str], None] | None = None,
+    timeout: int | None = 7200,
+    idle_timeout: int | None = 300,
+    on_heartbeat: Callable[[StreamStatus], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    heartbeat_interval: float = 1.0,
+    json_mode: bool = False,
+) -> StreamResult:
+    raw_output: list[str] = []
+    assistant_output: list[str] = []
+
+    def handle_line(line: str) -> None:
+        raw_output.append(line)
+        if json_mode:
+            event = parse_json_stream_event(line)
+            delta = extract_json_stream_delta(event)
+            if delta:
+                assistant_output.append(delta)
+                if on_output:
+                    on_output(delta)
+            elif on_output:
+                status = format_json_stream_status(event) if event else line
+                if status:
+                    on_output(status)
+        else:
+            assistant_output.append(line)
             if on_output:
-                on_output(delta)
-        elif on_output:
-            status = format_json_stream_status(event) if event else line
-            if status:
-                on_output(status)
-    returncode = proc.wait()
-    output = "".join(output_parts)
-    raw_output = "".join(raw_parts)
-    if returncode != 0:
-        raise ResearchError(f"pi research exited with status {returncode}", command, output or raw_output, returncode)
-    if not output.strip():
-        raise ResearchError("pi JSON stream completed without assistant text output", command, raw_output, returncode)
-    return output
+                on_output(line)
+
+    result = run_streaming_process(
+        cmd,
+        cwd=ROOT,
+        on_output=handle_line,
+        on_heartbeat=on_heartbeat,
+        cancel_check=cancel_check,
+        total_timeout=timeout,
+        idle_timeout=idle_timeout,
+        heartbeat_interval=heartbeat_interval,
+    )
+    if json_mode:
+        if result.returncode == 0 and not ''.join(assistant_output).strip():
+            return StreamResult(command=result.command, returncode=result.returncode, output=''.join(raw_output), reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
+        return StreamResult(command=result.command, returncode=result.returncode, output=''.join(assistant_output) or ''.join(raw_output), reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
+    return StreamResult(command=result.command, returncode=result.returncode, output=''.join(assistant_output), reason=result.reason, timed_out=result.timed_out, idle_timed_out=result.idle_timed_out, cancelled=result.cancelled)
 
 
 def parse_json_stream_event(line: str) -> dict | None:
