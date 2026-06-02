@@ -20,6 +20,8 @@
     .chart { min-width: 0; }
     .chart h2 { margin-bottom: 8px; }
     .legend { font-size: 12px; columns: 1; }
+    .legend button { display: block; border: 0; background: transparent; padding: 2px 0; cursor: pointer; text-align: left; color: inherit; font: inherit; }
+    .legend button.off { opacity: 0.35; text-decoration: line-through; }
     .legend span { display: inline-block; width: 0.9em; height: 0.9em; margin-right: 0.35em; vertical-align: middle; }
     .axis path, .axis line { stroke: #333; }
     .axis text { fill: #333; font-size: 12px; }
@@ -100,12 +102,21 @@ function chartWrap(title, targetId) {
   document.getElementById(targetId).appendChild(wrap);
   return wrap;
 }
-function appendLegend(wrap, groups, color) {
+function appendLegend(wrap, groups, color, seriesElements = new Map()) {
   const legend = document.createElement('div');
   legend.className = 'legend';
   for (const key of groups.keys()) {
-    const item = document.createElement('div');
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.title = 'Click to show/hide this series';
     item.innerHTML = `<span style="background:${color(key)}"></span>${esc(key)}`;
+    item.addEventListener('click', () => {
+      const series = seriesElements.get(key);
+      if (!series) return;
+      const hidden = series.attr('display') === 'none';
+      series.attr('display', hidden ? null : 'none');
+      item.classList.toggle('off', !hidden);
+    });
     legend.appendChild(item);
   }
   wrap.appendChild(legend);
@@ -161,18 +172,20 @@ function drawLineChart({targetId, title, data, groupKey, xValue, yValue, xLabel,
   const colorKeys = [...new Set([...groups].map(([key, items]) => colorKey(key, items[0])))];
   const color = d3.scaleOrdinal(colorKeys, colors);
   const line = d3.line().defined(d => Number.isFinite(xValue(d)) && Number.isFinite(yValue(d))).x(d => x(xValue(d))).y(d => y(yValue(d)));
+  const seriesElements = new Map();
   for (const [key, items] of groups) {
     const sample = items[0];
     const stroke = color(colorKey(key, sample));
-    svg.append('path')
+    const series = svg.append('g').attr('class', 'series');
+    seriesElements.set(key, series);
+    series.append('path')
       .datum(items)
       .attr('fill', 'none')
       .attr('stroke', stroke)
       .attr('stroke-width', 2)
       .attr('stroke-dasharray', dash(key, sample))
       .attr('d', line);
-    svg.append('g')
-      .selectAll('circle')
+    series.selectAll('circle')
       .data(items.filter(d => Number.isFinite(xValue(d)) && Number.isFinite(yValue(d))))
       .join('circle')
       .attr('cx', d => x(xValue(d)))
@@ -182,7 +195,7 @@ function drawLineChart({targetId, title, data, groupKey, xValue, yValue, xLabel,
       .append('title')
       .text(d => tooltip(key, d));
   }
-  appendLegend(wrap, groups, key => color(colorKey(key, groups.get(key)[0])));
+  appendLegend(wrap, groups, key => color(colorKey(key, groups.get(key)[0])), seriesElements);
 }
 
 const rowsWithTest = rows.map(r => Object.assign({}, r, {test: r.test ?? testName(r)}));
