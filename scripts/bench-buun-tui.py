@@ -51,16 +51,16 @@ FIELD_DESCRIPTIONS = {
     "warmup": "llama-bench --no-warmup toggle. Source default is warmup enabled; false appends --no-warmup. Variant notes: disabling warmup is bad for final quantized/MoE/MTP/REAP comparisons because first-run allocation/cache effects skew results.",
     "device": "llama-bench -dev/--device. Default is auto. CUDA0 targets the RTX GPU explicitly. Variant notes: for single-GPU quantized/MoE/MTP/REAP tests, CUDA0 avoids accidental CPU/other-device placement; use auto only when testing device selection.",
     "flash_attn": "llama-bench -fa/--flash-attn. Default is 0. 1 enables Flash Attention. Variant notes: usually useful for long context, but if a quantized/MTP/REAP model or KV type misbehaves, compare with 0; interacts with cache_strategy and high depth.",
-    "temp": "llama-server --temp/--temperature. Sampling temperature; documented/server source default is 0.80. Variant notes: only affects generation sampling, not prompt processing. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
-    "top_p": "llama-server --top-p. Nucleus sampling probability mass; documented/server source default is 0.95, 1.0 disables. Variant notes: only affects generation. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
-    "top_k": "llama-server --top-k. Top-k sampling candidate limit; documented/server source default is 40, 0 disables. Variant notes: only affects generation. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
-    "min_p": "llama-server --min-p. Minimum probability sampling threshold; documented/server source default is 0.05, 0.0 disables. Variant notes: only affects generation. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
-    "presence_penalty": "llama-server --presence-penalty. Penalizes tokens already present; documented/server source default is 0.00, disabled. Variant notes: only affects generation and can change MTP/speculative acceptance. Current llama-bench --help/source does not expose this flag.",
-    "repeat_penalty": "llama-server --repeat-penalty. Penalizes repeated token sequences; documented/server source default is 1.00, disabled. Variant notes: only affects generation and can change MTP/speculative acceptance. Current llama-bench --help/source does not expose this flag.",
-    "draft": "llama-server --draft/--draft-n/--draft-max. Compatibility alias for speculative draft token count; documented defaults are 16 for top-level speculative n_max and 3 for --spec-draft-n-max. Variant notes: MTP/speculative only; MoE docs note MoEs require long drafts. Current llama-bench --help/source does not expose this flag.",
-    "specd_draft_n_max": "llama-server --spec-draft-n-max. Maximum speculative draft tokens; documented/server source default is 3. Note: server docs spell this --spec-draft-n-max, not --specd-draft-n-max. Variant notes: MTP/speculative only; higher can help MoE but costs memory/verification. Current llama-bench --help/source does not expose this flag.",
+    "temp": "llama-server --temp/--temperature. Sampling temperature; documented/server source default is 0.80. Variant notes: only affects generation sampling, not prompt processing. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "top_p": "llama-server --top-p. Nucleus sampling probability mass; documented/server source default is 0.95, 1.0 disables. Variant notes: only affects generation. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "top_k": "llama-server --top-k. Top-k sampling candidate limit; documented/server source default is 40, 0 disables. Variant notes: only affects generation. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "min_p": "llama-server --min-p. Minimum probability sampling threshold; documented/server source default is 0.05, 0.0 disables. Variant notes: only affects generation. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "presence_penalty": "llama-server --presence-penalty. Penalizes tokens already present; documented/server source default is 0.00, disabled. Variant notes: only affects generation and can change MTP/speculative acceptance. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "repeat_penalty": "llama-server --repeat-penalty. Penalizes repeated token sequences; documented/server source default is 1.00, disabled. Variant notes: only affects generation and can change MTP/speculative acceptance. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "draft": "llama-server --draft/--draft-n/--draft-max. Compatibility alias for speculative draft token count; documented defaults are 16 for top-level speculative n_max and 3 for --spec-draft-n-max. Variant notes: MTP/speculative only; MoE docs note MoEs require long drafts. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "specd_draft_n_max": "llama-server --spec-draft-n-max. Maximum speculative draft tokens; documented/server source default is 3. Note: server docs spell this --spec-draft-n-max, not --specd-draft-n-max. Variant notes: MTP/speculative only; higher can help MoE but costs memory/verification. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
     "no_mmap": "llama-server --no-mmap. Disable memory mapping; server and llama-bench source/help default to mmap enabled. In llama-bench this is emitted as --mmap 0 when enabled. Variant notes: may reduce pageouts when not using mlock but slows load; no quantized/MTP/MoE/REAP-specific conflict found.",
-    "mlock": "llama-server --mlock. Lock model memory; source default is false/off. Variant notes: useful to avoid swapping for large quantized/MoE/MTP/REAP models, but can fail under low RAM/ulimit; avoid combining with no_mmap if RAM headroom is tight. Current llama-bench --help/source does not expose this flag.",
+    "mlock": "llama-server --mlock. Lock model memory; source default is false/off. Variant notes: useful to avoid swapping for large quantized/MoE/MTP/REAP models, but can fail under low RAM/ulimit; avoid combining with no_mmap if RAM headroom is tight. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
 }
 
 
@@ -378,18 +378,8 @@ def profile_command(profile: Profile, raw_path: Path) -> list[str]:
         cmd.extend(["--cache-type-v", ctv])
     add_arg(cmd, "--device", profile.device)
     add_arg(cmd, "--flash-attn", profile.flash_attn)
-    add_arg(cmd, "--temp", profile.temp)
-    add_arg(cmd, "--top-p", profile.top_p)
-    add_arg(cmd, "--top-k", profile.top_k)
-    add_arg(cmd, "--min-p", profile.min_p)
-    add_arg(cmd, "--presence-penalty", profile.presence_penalty)
-    add_arg(cmd, "--repeat-penalty", profile.repeat_penalty)
-    add_arg(cmd, "--draft", profile.draft)
-    add_arg(cmd, "--specd-draft-n-max", profile.specd_draft_n_max)
     if is_set(profile.no_mmap) and truthy(profile.no_mmap):
         cmd.extend(["--mmap", "0"])
-    if is_set(profile.mlock) and truthy(profile.mlock):
-        cmd.append("--mlock")
     add_arg(cmd, "--repetitions", profile.repetitions)
     if profile.warmup.lower() not in {"1", "true", "yes", "on", "unset", "none", "default"}:
         cmd.append("--no-warmup")
