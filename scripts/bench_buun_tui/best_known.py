@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import json
 import re
 import shlex
 import subprocess
@@ -167,12 +168,12 @@ def generate_best_known_params(path: Path = BEST_KNOWN_PARAMS) -> Path:
     return run_best_known_research(path).path
 
 
-def run_best_known_research(path: Path = BEST_KNOWN_PARAMS, on_output: Callable[[str], None] | None = None) -> ResearchRun:
+def run_best_known_research(path: Path = BEST_KNOWN_PARAMS, on_output: Callable[[str], None] | None = None, stream: bool = False) -> ResearchRun:
     models = find_models()
     prompt = build_research_prompt(models)
-    cmd = ["pi", "-p", prompt]
+    cmd = ["pi", "--mode", "json", prompt] if stream else ["pi", "-p", prompt]
     command = shlex.join(cmd)
-    output = run_research_command(cmd, command, on_output)
+    output = run_research_command_json(cmd, command, on_output) if stream else run_research_command(cmd, command, on_output)
     try:
         cp = parse_research_output(output)
     except Exception as exc:
@@ -206,6 +207,46 @@ def run_research_command(cmd: list[str], command: str, on_output: Callable[[str]
     if returncode != 0:
         raise ResearchError(f"pi research exited with status {returncode}", command, output, returncode)
     return output
+
+
+def run_research_command_json(cmd: list[str], command: str, on_output: Callable[[str], None] | None = None) -> str:
+    try:
+        proc = subprocess.Popen(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+    except Exception as exc:
+        raise ResearchError(f"Failed to start pi research: {exc}", command, "") from exc
+    output_parts: list[str] = []
+    raw_parts: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        raw_parts.append(line)
+        delta = extract_json_stream_delta(line)
+        if delta:
+            output_parts.append(delta)
+            if on_output:
+                on_output(delta)
+        elif on_output and not line.lstrip().startswith("{"):
+            on_output(line)
+    returncode = proc.wait()
+    output = "".join(output_parts)
+    raw_output = "".join(raw_parts)
+    if returncode != 0:
+        raise ResearchError(f"pi research exited with status {returncode}", command, output or raw_output, returncode)
+    if not output.strip():
+        raise ResearchError("pi JSON stream completed without assistant text output", command, raw_output, returncode)
+    return output
+
+
+def extract_json_stream_delta(line: str) -> str:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+    if event.get("type") != "message_update":
+        return ""
+    assistant_event = event.get("assistantMessageEvent") or {}
+    if assistant_event.get("type") == "text_delta":
+        return str(assistant_event.get("delta") or "")
+    return ""
 
 
 def build_research_prompt(models: list[str]) -> str:

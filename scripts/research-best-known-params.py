@@ -14,6 +14,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=BEST_KNOWN_PARAMS, help="INI file to write")
     parser.add_argument("--print-prompt", action="store_true", help="print the generated pi -p prompt and exit")
+    parser.add_argument("--stream", action="store_true", help="run pi with --mode json and print assistant deltas as they arrive")
     args = parser.parse_args()
 
     if args.print_prompt:
@@ -21,7 +22,7 @@ def main() -> int:
         return 0
 
     try:
-        run = run_best_known_research(args.output, on_output=print_stream_chunk)
+        run = run_best_known_research(args.output, on_output=print_stream_chunk if args.stream else None, stream=args.stream)
     except ResearchError as exc:
         print(f"\nResearch errored: {exc}" + (f" (status {exc.returncode})" if exc.returncode is not None else ""))
         print(f"Command ran:\n{exc.command}\n")

@@ -175,7 +175,7 @@ def run_best_known_research_with_popup(stdscr) -> bool:
 
     draw_output_popup(stdscr, "Researching best-known params", output_lines, "Starting pi -p...")
     try:
-        run = run_best_known_research(on_output=on_output)
+        run = run_best_known_research(on_output=on_output, stream=True)
     except ResearchError as exc:
         lines = research_result_lines(
             saved_path=None,
