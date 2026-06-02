@@ -244,19 +244,42 @@ def research_best_known_action(stdscr) -> None:
 def update_model_presets_action(stdscr) -> None:
     script = ROOT / "scripts" / "update-buun-model-presets.py"
     cmd = [sys.executable, str(script)]
-    show_status(stdscr, "Updating model presets from best benchmark results...", str(script))
-    proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
-    lines = [
-        f"Command: {subprocess.list2cmdline(cmd)}",
-        f"Return code: {proc.returncode}",
-    ]
-    if proc.stdout.strip():
-        lines.extend(["", "Output:", *proc.stdout.rstrip().splitlines()])
-    if proc.stderr.strip():
-        lines.extend(["", "Errors:", *proc.stderr.rstrip().splitlines()])
-    if proc.returncode == 0:
-        lines.extend(["", "Updated: versions/buun/model-presets.ini"])
-    show_scroll_text(stdscr, "Model preset update", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+    output_lines = [f"Updating model presets from best benchmark results..."]
+    stdscr.nodelay(True)
+    try:
+        def on_output(chunk: str) -> None:
+            append_output_lines(output_lines, chunk)
+            draw_output_popup(stdscr, "Updating model presets", output_lines, "Streaming... Esc cancels")
+
+        def on_heartbeat(status: StreamStatus) -> None:
+            draw_output_popup(stdscr, "Updating model presets", output_lines, stream_footer("update-buun-model-presets", status))
+
+        def cancel_check() -> bool:
+            return popup_cancel_requested(stdscr)
+
+        draw_output_popup(stdscr, "Updating model presets", output_lines, "Starting update... Esc cancels")
+        result = run_streaming_process(
+            cmd,
+            cwd=ROOT,
+            on_output=on_output,
+            on_heartbeat=on_heartbeat,
+            cancel_check=cancel_check,
+            total_timeout=None,
+            idle_timeout=None,
+        )
+        lines = [
+            f"Command: {subprocess.list2cmdline(cmd)}",
+            f"Return code: {result.returncode}",
+            f"Elapsed: {result.elapsed_seconds:.1f}s",
+        ]
+        if result.reason:
+            lines.append(f"Reason: {result.reason}")
+        metric_tail = [line.rstrip() for line in result.output.splitlines() if line.strip()][-20:]
+        if metric_tail:
+            lines.extend(["", "Output:", *metric_tail])
+        show_scroll_text(stdscr, "Model preset update", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+    finally:
+        stdscr.nodelay(False)
 
 
 def invert_profile_configs(profiles: list[Profile]) -> None:
