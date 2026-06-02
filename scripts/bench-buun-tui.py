@@ -37,30 +37,21 @@ CACHE_STRATEGIES = {
 }
 
 FIELD_DESCRIPTIONS = {
-    "model": "llama-bench -m/--model. GGUF model file discovered under ./models; bench source default is models/7B/ggml-model-q4_0.gguf but this TUI selects a local GGUF. Variant notes: choose a GGUF matching the scenario (quantized, MoE, MTP/REAP); no parameter conflict found in help/source.",
-    "cache_strategy": "Maps to llama-bench -ctk/--cache-type-k and -ctv/--cache-type-v. Bench default is f16/f16; TUI default turbo uses buun turbo4/turbo3. Variant notes: quantized KV (turbo/q8) can reduce memory but may affect quality/compat; use f16 when debugging MTP/REAP or unsupported cache types.",
-    "depths": "llama-bench -d/--n-depth. Default is 0. Prefills this many tokens before measuring; high depths stress KV memory. Variant notes: bad for low-memory quantized/MoE/MTP/REAP runs when combined with large batch/ubatch or f16 KV; reduce depth first on OOM.",
-    "batch_size": "llama-bench -b/--batch-size. Default is 2048. Logical prompt-processing batch size. Larger improves prefill but increases memory/graph pressure. Variant notes: bad for long-context quantized/MoE/MTP/REAP if paired with high n-depth, high ubatch, f16 KV, or many GPU layers.",
-    "ubatch_size": "llama-bench -ub/--ubatch-size. Default is 512. Physical micro-batch size. Lower reduces memory pressure; higher can improve throughput. Variant notes: for quantized/MoE/MTP/REAP, lower this before lowering batch_size when VRAM pressure or CUDA graph failures appear.",
-    "threads": "llama-bench -t/--threads. Default is common_cpu_get_num_math() from source (6 on this binary's --help). CPU eval/decode threads; oversubscription can hurt latency. Variant notes: MoE CPU-offload needs CPU headroom, so avoid setting this too high together with high n_cpu_moe.",
-    "n_cpu_moe": "buun llama-bench -ncmoe/--n-cpu-moe. Default is 0. Keeps first N MoE expert layers on CPU. Variant notes: MoE-specific; useless for dense/non-MoE. Higher saves VRAM but can bottleneck CPU/RAM; conflicts with very high threads if CPU is saturated.",
-    "gpu_layers": "llama-bench -ngl/--n-gpu-layers. Default is 99. Offloads layers to GPU. Variant notes: high values can OOM quantized/MoE/MTP/REAP with high depth/batch/f16 KV; lower it or raise n_cpu_moe for MoE. 99 means as much as possible in bench source.",
-    "prompt": "llama-bench -p/--n-prompt. Default is 512. Prompt/prefill tokens measured after depth; use 0 for generation-only depth tests. Variant notes: large prompt plus high depth/batch stresses KV and prompt kernels for quantized/MoE/MTP/REAP.",
-    "gen": "llama-bench -n/--n-gen. Default is 128. Generated tokens to measure; smaller is faster but noisier. Variant notes: use nonzero generation when testing MTP/speculative behavior; prompt-only tests will not reflect draft-token acceptance.",
-    "repetitions": "llama-bench -r/--repetitions. Default is 5; TUI default is 1 for faster exploration. Higher stabilizes numbers but multiplies runtime. Variant notes: use more reps for noisy MoE CPU-offload, quantized KV, MTP/REAP comparisons.",
-    "warmup": "llama-bench --no-warmup toggle. Source default is warmup enabled; false appends --no-warmup. Variant notes: disabling warmup is bad for final quantized/MoE/MTP/REAP comparisons because first-run allocation/cache effects skew results.",
-    "device": "llama-bench -dev/--device. Default is auto. CUDA0 targets the RTX GPU explicitly. Variant notes: for single-GPU quantized/MoE/MTP/REAP tests, CUDA0 avoids accidental CPU/other-device placement; use auto only when testing device selection.",
-    "flash_attn": "llama-bench -fa/--flash-attn. Default is 0. 1 enables Flash Attention. Variant notes: usually useful for long context, but if a quantized/MTP/REAP model or KV type misbehaves, compare with 0; interacts with cache_strategy and high depth.",
-    "temp": "llama-server --temp/--temperature. Sampling temperature; documented/server source default is 0.80. Variant notes: only affects generation sampling, not prompt processing. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "top_p": "llama-server --top-p. Nucleus sampling probability mass; documented/server source default is 0.95, 1.0 disables. Variant notes: only affects generation. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "top_k": "llama-server --top-k. Top-k sampling candidate limit; documented/server source default is 40, 0 disables. Variant notes: only affects generation. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "min_p": "llama-server --min-p. Minimum probability sampling threshold; documented/server source default is 0.05, 0.0 disables. Variant notes: only affects generation. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "presence_penalty": "llama-server --presence-penalty. Penalizes tokens already present; documented/server source default is 0.00, disabled. Variant notes: only affects generation and can change MTP/speculative acceptance. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "repeat_penalty": "llama-server --repeat-penalty. Penalizes repeated token sequences; documented/server source default is 1.00, disabled. Variant notes: only affects generation and can change MTP/speculative acceptance. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "draft": "llama-server --draft/--draft-n/--draft-max. Compatibility alias for speculative draft token count; documented defaults are 16 for top-level speculative n_max and 3 for --spec-draft-n-max. Variant notes: MTP/speculative only; MoE docs note MoEs require long drafts. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "specd_draft_n_max": "llama-server --spec-draft-n-max. Maximum speculative draft tokens; documented/server source default is 3. Note: server docs spell this --spec-draft-n-max, not --specd-draft-n-max. Variant notes: MTP/speculative only; higher can help MoE but costs memory/verification. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
-    "no_mmap": "llama-server --no-mmap. Disable memory mapping; server and llama-bench source/help default to mmap enabled. In llama-bench this is emitted as --mmap 0 when enabled. Variant notes: may reduce pageouts when not using mlock but slows load; no quantized/MTP/MoE/REAP-specific conflict found.",
-    "mlock": "llama-server --mlock. Lock model memory; source default is false/off. Variant notes: useful to avoid swapping for large quantized/MoE/MTP/REAP models, but can fail under low RAM/ulimit; avoid combining with no_mmap if RAM headroom is tight. Not emitted by this TUI because current llama-bench --help/source does not expose this flag.",
+    "model": "llama-bench -m/--model. GGUF model file discovered under ./models; bench source default is models/7B/ggml-model-q4_0.gguf but this TUI selects a local GGUF. Variant notes: choose a GGUF matching the scenario (quantized, MoE, MTP/REAP); no parameter conflict found in help/source. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "cache_strategy": "Maps to llama-bench -ctk/--cache-type-k and -ctv/--cache-type-v. Bench default is f16/f16; TUI default turbo uses buun turbo4/turbo3. Variant notes: quantized KV (turbo/q8) can reduce memory but may affect quality/compat; use f16 when debugging MTP/REAP or unsupported cache types. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "depths": "llama-bench -d/--n-depth. Default is 0. Prefills this many tokens before measuring; high depths stress KV memory. Variant notes: bad for low-memory quantized/MoE/MTP/REAP runs when combined with large batch/ubatch or f16 KV; reduce depth first on OOM. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "batch_size": "llama-bench -b/--batch-size. Default is 2048. Logical prompt-processing batch size. Larger improves prefill but increases memory/graph pressure. Variant notes: bad for long-context quantized/MoE/MTP/REAP if paired with high n-depth, high ubatch, f16 KV, or many GPU layers. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "ubatch_size": "llama-bench -ub/--ubatch-size. Default is 512. Physical micro-batch size. Lower reduces memory pressure; higher can improve throughput. Variant notes: for quantized/MoE/MTP/REAP, lower this before lowering batch_size when VRAM pressure or CUDA graph failures appear. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "threads": "llama-bench -t/--threads. Default is common_cpu_get_num_math() from source (6 on this binary's --help). CPU eval/decode threads; oversubscription can hurt latency. Variant notes: MoE CPU-offload needs CPU headroom, so avoid setting this too high together with high n_cpu_moe. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "n_cpu_moe": "buun llama-bench -ncmoe/--n-cpu-moe. Default is 0. Keeps first N MoE expert layers on CPU. Variant notes: MoE-specific; useless for dense/non-MoE. Higher saves VRAM but can bottleneck CPU/RAM; conflicts with very high threads if CPU is saturated. Refs: llama-bench --help; common/arg.cpp; docs/speculative.md.",
+    "gpu_layers": "llama-bench -ngl/--n-gpu-layers. Default is 99. Offloads layers to GPU. Variant notes: high values can OOM quantized/MoE/MTP/REAP with high depth/batch/f16 KV; lower it or raise n_cpu_moe for MoE. 99 means as much as possible in bench source. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "prompt": "llama-bench -p/--n-prompt. Default is 512. Prompt/prefill tokens measured after depth; use 0 for generation-only depth tests. Variant notes: large prompt plus high depth/batch stresses KV and prompt kernels for quantized/MoE/MTP/REAP. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "gen": "llama-bench -n/--n-gen. Default is 128. Generated tokens to measure; smaller is faster but noisier. Variant notes: use nonzero generation when testing MTP/speculative behavior; prompt-only tests will not reflect draft-token acceptance. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp; docs/speculative.md.",
+    "repetitions": "llama-bench -r/--repetitions. Default is 5; TUI default is 1 for faster exploration. Higher stabilizes numbers but multiplies runtime. Variant notes: use more reps for noisy MoE CPU-offload, quantized KV, MTP/REAP comparisons. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "warmup": "llama-bench --no-warmup toggle. Source default is warmup enabled; false appends --no-warmup. Variant notes: disabling warmup is bad for final quantized/MoE/MTP/REAP comparisons because first-run allocation/cache effects skew results. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "device": "llama-bench -dev/--device. Default is auto. CUDA0 targets the RTX GPU explicitly. Variant notes: for single-GPU quantized/MoE/MTP/REAP tests, CUDA0 avoids accidental CPU/other-device placement; use auto only when testing device selection. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "flash_attn": "llama-bench -fa/--flash-attn. Default is 0. 1 enables Flash Attention. Variant notes: usually useful for long context, but if a quantized/MTP/REAP model or KV type misbehaves, compare with 0; interacts with cache_strategy and high depth. Refs: llama-bench --help; tools/llama-bench/llama-bench.cpp.",
+    "no_mmap": "llama-server --no-mmap. Disable memory mapping; server and llama-bench source/help default to mmap enabled. In llama-bench this is emitted as --mmap 0 when enabled. Variant notes: may reduce pageouts when not using mlock but slows load; no quantized/MTP/MoE/REAP-specific conflict found. Refs: llama-bench --help; common/arg.cpp; llama-model.cpp.",
 }
 
 
@@ -80,16 +71,7 @@ PRESETS = {
     "warmup": ["false", "true", "unset"],
     "device": ["CUDA0", "auto", "unset"],
     "flash_attn": ["1", "0", "unset"],
-    "temp": ["unset", "0.7", "0.0", "1.0", "custom"],
-    "top_p": ["unset", "0.95", "1.0", "0.9", "custom"],
-    "top_k": ["unset", "20", "40", "0", "custom"],
-    "min_p": ["unset", "0.0", "0.05", "0.1", "custom"],
-    "presence_penalty": ["unset", "0.0", "0.1", "custom"],
-    "repeat_penalty": ["unset", "1.0", "1.05", "1.1", "custom"],
-    "draft": ["unset", "mtp", "custom"],
-    "specd_draft_n_max": ["unset", "2", "1", "4", "custom"],
     "no_mmap": ["unset", "false", "true"],
-    "mlock": ["unset", "false", "true"],
 }
 
 
@@ -110,16 +92,7 @@ class Profile:
     warmup: str = "false"
     device: str = "CUDA0"
     flash_attn: str = "1"
-    temp: str = "unset"
-    top_p: str = "unset"
-    top_k: str = "unset"
-    min_p: str = "unset"
-    presence_penalty: str = "unset"
-    repeat_penalty: str = "unset"
-    draft: str = "unset"
-    specd_draft_n_max: str = "unset"
     no_mmap: str = "unset"
-    mlock: str = "unset"
 
     def items(self) -> list[tuple[str, str]]:
         return [
@@ -137,16 +110,7 @@ class Profile:
             ("warmup", self.warmup),
             ("device", self.device),
             ("flash_attn", self.flash_attn),
-            ("temp", self.temp),
-            ("top_p", self.top_p),
-            ("top_k", self.top_k),
-            ("min_p", self.min_p),
-            ("presence_penalty", self.presence_penalty),
-            ("repeat_penalty", self.repeat_penalty),
-            ("draft", self.draft),
-            ("specd_draft_n_max", self.specd_draft_n_max),
             ("no_mmap", self.no_mmap),
-            ("mlock", self.mlock),
         ]
 
 
