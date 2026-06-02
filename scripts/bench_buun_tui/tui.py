@@ -466,7 +466,9 @@ def show_scroll_text(stdscr, title: str, lines: list[str], accept_text: str, ent
         top = max(0, min(top, max(0, len(visible_lines) - body_height)))
         for row, line in enumerate(visible_lines[top : top + body_height], start=1):
             safe_addstr_highlighted(stdscr, row, 0, line, cols - 1)
-        safe_addstr(stdscr, rows - 2, 0, accept_text[: cols - 1], footer_attr())
+        scroll_hint = scroll_text_hint(top, body_height, len(visible_lines))
+        footer = f"{accept_text}  •  {scroll_hint}" if scroll_hint else accept_text
+        safe_addstr(stdscr, rows - 2, 0, footer[: cols - 1], footer_attr())
         key = stdscr.getch()
         if key in (curses.KEY_UP, ord("k")):
             top -= 1
@@ -480,6 +482,13 @@ def show_scroll_text(stdscr, title: str, lines: list[str], accept_text: str, ent
             return False
         elif key in (10, 13):
             return True if not enter_accepts else False
+
+
+def scroll_text_hint(top: int, body_height: int, total_lines: int) -> str:
+    if total_lines <= body_height:
+        return ""
+    end = min(total_lines, top + body_height)
+    return f"↑/↓ scroll  •  PgUp/PgDn page  •  {top + 1}-{end}/{total_lines}"
 
 
 def wrap_lines_for_screen(lines: list[str], width: int) -> list[str]:
