@@ -29,12 +29,16 @@
   <div class=\"tabs\">
     <button class=\"tab-btn active\" data-tab=\"charts-tab\">Charts</button>
     <button class=\"tab-btn\" data-tab=\"table-tab\">Raw table</button>
+    <button class=\"tab-btn\" data-tab=\"telemetry-tab\">Telemetry</button>
   </div>
   <section id=\"charts-tab\" class=\"tab-panel active\">
     <h2>Throughput</h2>
     <div id=\"charts\" class=\"charts-grid\"></div>
     <h2>CPU/GPU offload</h2>
     <div id=\"offload\" class=\"charts-grid\"></div>
+    <h2>Runtime telemetry</h2>
+    <p>These charts mirror the GPU and <code>llama-server /metrics</code> values captured by <code>manage-server.sh snapshot</code> when available.</p>
+    <div id=\"telemetry-charts\" class=\"charts-grid\"></div>
     <h2 class=\"error\" id=\"error-title\"></h2>
     <div id=\"errors\"></div>
   </section>
@@ -42,9 +46,14 @@
     <h2>Raw rows</h2>
     <table id=\"rows\"></table>
   </section>
+  <section id=\"telemetry-tab\" class=\"tab-panel\">
+    <h2>Telemetry samples</h2>
+    <table id=\"telemetry-rows\"></table>
+  </section>
 <script>
 const rows = __ROWS_JSON__;
 const errors = __ERRORS_JSON__;
+const telemetry = __TELEMETRY_JSON__;
 document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -106,6 +115,63 @@ function drawChart(title, chartRows) {
 }
 const rowsWithTest = rows.map(r => Object.assign({}, r, {test: r.test ?? testName(r)}));
 for (const t of [...new Set(rowsWithTest.map(r => r.test))].sort()) drawChart(t, rowsWithTest.filter(r => r.test === t));
+
+function drawTelemetryChart(field, title, unit='') {
+  const samples = telemetry.filter(s => Number.isFinite(num(s[field])));
+  if (!samples.length) return;
+  const wrap = document.createElement('div'); wrap.className = 'chart';
+  wrap.innerHTML = `<h2>${esc(title)}</h2>`;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const W = 900, H = 360, L = 75, R = 25, T = 30, B = 65;
+  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); wrap.appendChild(svg);
+  const start = Math.min(...samples.map(s => num(s.sample_ts)));
+  const xs = samples.map(s => num(s.sample_ts) - start);
+  const ys = samples.map(s => num(s[field]));
+  const xmin = Math.min(...xs, 0), xmax = Math.max(...xs, 1);
+  const ymin = Math.min(...ys, 0), ymax = Math.max(...ys, 1) * 1.12;
+  const sx = x => L + (num(x)-xmin) / (xmax-xmin || 1) * (W-L-R);
+  const sy = y => H-B - (num(y)-ymin) / (ymax-ymin || 1) * (H-T-B);
+  svgEl(svg, 'line', {x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:'#333'});
+  svgEl(svg, 'line', {x1:L,y1:T,x2:L,y2:H-B,stroke:'#333'});
+  for (let i=0;i<=5;i++) {
+    const y = ymin + (ymax-ymin)*i/5, py = sy(y);
+    svgEl(svg, 'line', {x1:L,x2:W-R,y1:py,y2:py,stroke:'#eee'});
+    svgEl(svg, 'text', {x:8,y:py+4,fill:'#333'}).textContent = y.toFixed(1);
+  }
+  const groups = new Map();
+  samples.forEach(s => { const k = s.profile ?? 'run'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); });
+  const legend = document.createElement('div'); legend.className = 'legend';
+  let ci = 0;
+  for (const [k, items] of groups) {
+    const color = colors[ci++ % colors.length];
+    const pts = items.map(s => `${sx(num(s.sample_ts)-start)},${sy(s[field])}`).join(' ');
+    svgEl(svg, 'polyline', {points:pts, fill:'none', stroke:color, 'stroke-width':2});
+    for (const s of items) {
+      svgEl(svg, 'circle', {cx:sx(num(s.sample_ts)-start), cy:sy(s[field]), r:3, fill:color});
+      svgEl(svg, 'title', {}).textContent = `${k} ${field}=${s[field]} ${unit} depth=${s.n_depth ?? ''}`;
+    }
+    const item = document.createElement('div'); item.innerHTML = `<span style=\"background:${color}\"></span>${esc(k)}`; legend.appendChild(item);
+  }
+  svgEl(svg, 'text', {x:(W-R+L)/2, y:H-15, fill:'#333','text-anchor':'middle'}).textContent = 'seconds since first sample';
+  svgEl(svg, 'text', {x:8, y:18, fill:'#333'}).textContent = unit || field;
+  wrap.appendChild(legend);
+  document.getElementById('telemetry-charts').appendChild(wrap);
+}
+function drawTelemetryCharts() {
+  const gpuFields = [
+    ['gpu_temp_c', 'GPU temperature', '°C'],
+    ['gpu_power_w', 'GPU power draw', 'W'],
+    ['gpu_util_pct', 'GPU utilization', '%'],
+    ['gpu_mem_util_pct', 'GPU memory utilization', '%'],
+    ['gpu_mem_used_mib', 'GPU memory used', 'MiB'],
+  ];
+  gpuFields.forEach(([field, title, unit]) => drawTelemetryChart(field, title, unit));
+  const merged = Object.assign({}, ...telemetry);
+  Object.keys(merged).filter(k => k.startsWith('metric_')).sort().slice(0, 12).forEach(field => drawTelemetryChart(field, field.replace(/^metric_/, 'llama '), ''));
+  if (!document.getElementById('telemetry-charts').children.length) {
+    document.getElementById('telemetry-charts').innerHTML = '<p>No telemetry samples available. Enable NVIDIA tooling and llama-server metrics on :8080 to populate these charts.</p>';
+  }
+}
 function drawOffloadChart() {
   const seen = new Set();
   const configs = [];
@@ -137,12 +203,16 @@ function drawOffloadChart() {
   document.getElementById('offload').appendChild(wrap);
 }
 drawOffloadChart();
+drawTelemetryCharts();
 if (errors.length) {
   document.getElementById('error-title').textContent = `Errors (${errors.length})`;
   document.getElementById('errors').innerHTML = errors.map(e => `<h3>${esc(e.profile ?? 'run')} exit=${esc(e.returncode ?? '')}</h3><pre>${esc(e.stderr_tail ?? e.error ?? '')}</pre>`).join('');
 }
 const table = document.getElementById('rows');
 table.innerHTML = '<tr>' + fields.map(f => `<th>${f}</th>`).join('') + '</tr>' + rowsWithTest.map(r => '<tr>' + fields.map(f => `<td>${esc(r[f])}</td>`).join('') + '</tr>').join('');
+const telemetryFields = [...new Set(telemetry.flatMap(r => Object.keys(r)))];
+const telemetryTable = document.getElementById('telemetry-rows');
+telemetryTable.innerHTML = telemetryFields.length ? '<tr>' + telemetryFields.map(f => `<th>${esc(f)}</th>`).join('') + '</tr>' + telemetry.map(r => '<tr>' + telemetryFields.map(f => `<td>${esc(r[f])}</td>`).join('') + '</tr>').join('') : '<tr><td>No telemetry samples</td></tr>';
 </script>
 </body>
 </html>

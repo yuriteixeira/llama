@@ -10,6 +10,7 @@ from .commands import is_set, profile_command
 from .config_store import load_config, slugify
 from .paths import RESULT_DIR, ROOT
 from .reports import SUMMARY_FIELDS, summary_row, write_html_report, write_summary
+from .telemetry import capture_telemetry
 
 
 def run_config(config_path: Path) -> int:
@@ -17,15 +18,16 @@ def run_config(config_path: Path) -> int:
     out_dir = create_result_dir(cfg.run_prefix)
     live_summary = init_live_summary(out_dir)
     all_rows: list[dict] = []
+    telemetry_rows: list[dict] = []
     errors: list[dict] = []
 
     for profile in cfg.profiles:
-        error = run_profile(profile, out_dir, live_summary, all_rows)
+        error = run_profile(profile, out_dir, live_summary, all_rows, telemetry_rows)
         if error:
             errors.append(error)
             break
 
-    write_final_outputs(out_dir, live_summary, all_rows, errors)
+    write_final_outputs(out_dir, live_summary, all_rows, telemetry_rows, errors)
     return 1 if errors else 0
 
 
@@ -43,29 +45,31 @@ def init_live_summary(out_dir: Path) -> Path:
     return live_summary
 
 
-def run_profile(profile, out_dir: Path, live_summary: Path, all_rows: list[dict]) -> dict | None:
+def run_profile(profile, out_dir: Path, live_summary: Path, all_rows: list[dict], telemetry_rows: list[dict]) -> dict | None:
     raw_path = out_dir / f"{profile.name}.jsonl"
     err_path = out_dir / f"{profile.name}.stderr.log"
     cmd = profile_command(profile, raw_path)
     print("+ " + " ".join(cmd), flush=True)
-    returncode = stream_profile_rows(profile, cmd, raw_path, err_path, live_summary, all_rows)
+    telemetry_rows.append(capture_telemetry(profile.name))
+    returncode = stream_profile_rows(profile, cmd, raw_path, err_path, live_summary, all_rows, telemetry_rows)
+    telemetry_rows.append(capture_telemetry(profile.name))
     if returncode == 0:
         return None
     return profile_error(profile, err_path, returncode, live_summary)
 
 
-def stream_profile_rows(profile, cmd: list[str], raw_path: Path, err_path: Path, live_summary: Path, all_rows: list[dict]) -> int:
+def stream_profile_rows(profile, cmd: list[str], raw_path: Path, err_path: Path, live_summary: Path, all_rows: list[dict], telemetry_rows: list[dict]) -> int:
     with raw_path.open("w") as raw, err_path.open("w") as err:
         proc = subprocess.Popen(cmd, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=err, bufsize=1)
         assert proc.stdout is not None
         for line in proc.stdout:
             raw.write(line)
             raw.flush()
-            handle_stdout_line(profile, line, live_summary, all_rows)
+            handle_stdout_line(profile, line, live_summary, all_rows, telemetry_rows)
         return proc.wait()
 
 
-def handle_stdout_line(profile, line: str, live_summary: Path, all_rows: list[dict]) -> None:
+def handle_stdout_line(profile, line: str, live_summary: Path, all_rows: list[dict], telemetry_rows: list[dict]) -> None:
     line = line.strip()
     if not line:
         return
@@ -77,6 +81,7 @@ def handle_stdout_line(profile, line: str, live_summary: Path, all_rows: list[di
     enrich_row(profile, row)
     all_rows.append(row)
     append_live_summary(row, live_summary)
+    telemetry_rows.append(capture_telemetry(profile.name, summary_row(row)))
     print_progress(profile.name, row)
 
 
@@ -115,11 +120,14 @@ def profile_error(profile, err_path: Path, returncode: int, live_summary: Path) 
     }
 
 
-def write_final_outputs(out_dir: Path, live_summary: Path, all_rows: list[dict], errors: list[dict]) -> None:
+def write_final_outputs(out_dir: Path, live_summary: Path, all_rows: list[dict], telemetry_rows: list[dict], errors: list[dict]) -> None:
     summary = out_dir / "summary.csv"
+    telemetry = out_dir / "telemetry.json"
     report = out_dir / "report.html"
     write_summary(all_rows, summary)
-    write_html_report(all_rows, report, errors)
+    telemetry.write_text(json.dumps(telemetry_rows, indent=2))
+    write_html_report(all_rows, report, errors, telemetry_rows)
     print(f"summary: {summary}")
     print(f"live:    {live_summary}")
-    print(f"report:  {report}")
+    print(f"telemetry: {telemetry}")
+    print(f"report:    {report}")

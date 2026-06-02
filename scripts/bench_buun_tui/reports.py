@@ -47,17 +47,18 @@ def _with_model_offload_info(row: dict) -> dict:
     return out
 
 
-def write_html_report(rows: list[dict], path: Path, errors: list[dict] | None = None) -> None:
-    html = render_html_report(rows, errors or [])
+def write_html_report(rows: list[dict], path: Path, errors: list[dict] | None = None, telemetry: list[dict] | None = None) -> None:
+    html = render_html_report(rows, errors or [], telemetry or [])
     path.write_text(html)
 
 
-def render_html_report(rows: list[dict], errors: list[dict]) -> str:
+def render_html_report(rows: list[dict], errors: list[dict], telemetry: list[dict] | None = None) -> str:
     template = HTML_REPORT_TEMPLATE.read_text()
     return (
         template
         .replace("__ROWS_JSON__", json.dumps(report_rows(rows)))
         .replace("__ERRORS_JSON__", json.dumps(errors))
+        .replace("__TELEMETRY_JSON__", json.dumps(telemetry or []))
     )
 
 
