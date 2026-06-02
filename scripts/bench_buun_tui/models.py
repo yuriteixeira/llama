@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
 
-from .paths import GGUF_PY, ROOT
+from .paths import GGUF_PY, RESULT_DIR, ROOT
 from .profile import PRESETS
 
 
@@ -25,7 +26,12 @@ def human_size(path: Path) -> str:
 
 
 def find_models() -> list[str]:
-    models = sorted(rel(p) for p in (ROOT / "models").glob("**/*.gguf"))
+    root = ROOT / "models"
+    cached = load_model_list_cache(root)
+    if cached is not None:
+        return cached or [""]
+    models = sorted(rel(p) for p in root.glob("**/*.gguf"))
+    save_model_list_cache(root, models)
     return models or [""]
 
 
@@ -169,14 +175,60 @@ def gguf_value(value):
 
 
 META_CACHE: dict[str, dict] = {}
+META_CACHE_SIGS: dict[str, tuple[int, int]] = {}
+_META_CACHE_LOADED = False
+MODELS_LIST_CACHE = RESULT_DIR / ".cache" / "models.json"
+META_CACHE_FILE = RESULT_DIR / ".cache" / "model-metadata.json"
+CACHE_VERSION = 1
+
+
+def load_model_list_cache(root: Path) -> list[str] | None:
+    data = read_json_cache(MODELS_LIST_CACHE)
+    if not data or data.get("version") != CACHE_VERSION:
+        return None
+    try:
+        root_stat = root.stat()
+    except FileNotFoundError:
+        return None
+    if data.get("root_mtime_ns") != root_stat.st_mtime_ns:
+        return None
+    models = data.get("models")
+    if isinstance(models, list) and all(isinstance(item, str) for item in models):
+        return list(models)
+    return None
+
+
+def save_model_list_cache(root: Path, models: list[str]) -> None:
+    try:
+        root_stat = root.stat()
+    except FileNotFoundError:
+        return
+    write_json_cache(
+        MODELS_LIST_CACHE,
+        {
+            "version": CACHE_VERSION,
+            "root_mtime_ns": root_stat.st_mtime_ns,
+            "models": models,
+        },
+    )
 
 
 def model_metadata(model: str) -> dict:
-    if model in META_CACHE:
-        return META_CACHE[model]
+    ensure_meta_cache_loaded()
+    path = model_path(model)
+    cached = META_CACHE.get(model)
+    if cached and metadata_cache_valid(path, model):
+        return cached
+    meta = load_model_metadata(path)
+    META_CACHE[model] = meta
+    save_meta_cache_entry(model, path, meta)
+    return meta
+
+
+def load_model_metadata(path: Path) -> dict:
     meta = {
         "architecture": "?",
-        "name": Path(model).stem,
+        "name": path.stem,
         "block_count": None,
         "size_label": "",
         "parameter_count": None,
@@ -188,7 +240,7 @@ def model_metadata(model: str) -> dict:
             sys.path.insert(0, str(GGUF_PY))
         from gguf import GGUFReader  # type: ignore
 
-        reader = GGUFReader(model_path(model), "r")
+        reader = GGUFReader(path, "r")
         for key, field in reader.fields.items():
             val = gguf_value(field.parts[-1])
             if key == "general.architecture":
@@ -207,7 +259,6 @@ def model_metadata(model: str) -> dict:
                 meta["expert_used_count"] = int(val)
     except Exception as exc:
         meta["error"] = repr(exc)
-    META_CACHE[model] = meta
     return meta
 
 
@@ -243,3 +294,67 @@ def choose_default_model(models: list[str]) -> str:
             if needle in model:
                 return model
     return models[0]
+
+
+def metadata_cache_valid(path: Path, model: str) -> bool:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return False
+    return META_CACHE_SIGS.get(model) == (stat.st_size, stat.st_mtime_ns)
+
+
+def save_meta_cache_entry(model: str, path: Path, meta: dict) -> None:
+    data = read_json_cache(META_CACHE_FILE) or {"version": CACHE_VERSION, "models": {}}
+    if data.get("version") != CACHE_VERSION:
+        data = {"version": CACHE_VERSION, "models": {}}
+    models = data.setdefault("models", {})
+    if isinstance(models, dict):
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            return
+        sig = (stat.st_size, stat.st_mtime_ns)
+        META_CACHE_SIGS[model] = sig
+        models[model] = {
+            "size_bytes": sig[0],
+            "mtime_ns": sig[1],
+            "meta": meta,
+        }
+        write_json_cache(META_CACHE_FILE, data)
+
+
+def ensure_meta_cache_loaded() -> None:
+    global _META_CACHE_LOADED
+    if _META_CACHE_LOADED:
+        return
+    data = read_json_cache(META_CACHE_FILE)
+    if data and data.get("version") == CACHE_VERSION:
+        models = data.get("models", {})
+        if isinstance(models, dict):
+            for model, entry in models.items():
+                if isinstance(model, str) and isinstance(entry, dict):
+                    meta = entry.get("meta")
+                    size_bytes = entry.get("size_bytes")
+                    mtime_ns = entry.get("mtime_ns")
+                    if isinstance(meta, dict) and isinstance(size_bytes, int) and isinstance(mtime_ns, int):
+                        META_CACHE[model] = meta
+                        META_CACHE_SIGS[model] = (size_bytes, mtime_ns)
+    _META_CACHE_LOADED = True
+
+
+def read_json_cache(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def write_json_cache(path: Path, payload: dict) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, separators=(",", ":")))
+    except Exception:
+        pass
