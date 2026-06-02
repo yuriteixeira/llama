@@ -26,6 +26,7 @@ from .models import (
     model_label,
     model_options,
 )
+from .offload import OffloadError, calculate_offload, format_bytes
 from .paths import CONFIG_DIR
 from .profile import BenchConfig, CACHE_STRATEGIES, FIELD_DESCRIPTIONS, PRESETS, Profile
 
@@ -333,6 +334,7 @@ def wrap_lines_for_screen(lines: list[str], width: int) -> list[str]:
 
 PROFILE_ACTIONS = {
     "__load_best_known": "Load best-known params for this model",
+    "__auto_offload": "Auto-calculate GPU/MoE offload",
     "__copy_from_other": "Copy bench params from other profile",
     "__show_server_command": "Show equivalent llama-server command",
 }
@@ -409,6 +411,12 @@ def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
         lines.append("")
         lines.extend(wrap_text("A preview is shown before values are changed. The profile model itself is kept unchanged.", width))
         return lines
+    if field == "__auto_offload":
+        lines = ["Auto-calculate GPU/MoE offload", ""]
+        lines.extend(wrap_text("Calculates gpu_layers/ngl and n_cpu_moe from GGUF layer sizes, detected MoE support, VRAM, RAM, and the profile's desired max context.", width))
+        lines.append("")
+        lines.extend(wrap_text("A preview shows the estimated GPU/CPU split before values are changed.", width))
+        return lines
     if field == "__copy_from_other":
         lines = ["Copy bench params from other profile", ""]
         lines.extend(wrap_text("Copies all benchmark/profile parameters from the other profile, but keeps this profile's model unchanged.", width))
@@ -428,6 +436,9 @@ def handle_profile_editor_selection(stdscr, profile: Profile, field: str, models
     if field == "__load_best_known":
         load_best_known_for_profile(stdscr, profile)
         return
+    if field == "__auto_offload":
+        auto_calculate_offload_for_profile(stdscr, profile)
+        return
     if field == "__copy_from_other":
         copy_from_other_profile(stdscr, profile, other_profile)
         return
@@ -435,6 +446,95 @@ def handle_profile_editor_selection(stdscr, profile: Profile, field: str, models
         show_server_command(stdscr, profile)
         return
     edit_profile_field(stdscr, profile, field, models)
+
+
+def auto_calculate_offload_for_profile(stdscr, profile: Profile) -> None:
+    context_text = prompt_text(
+        stdscr,
+        "Desired max context for offload sizing",
+        default_offload_context(profile),
+        "Used only for this calculation to estimate KV/cache runtime memory. Use your intended server --ctx-size, or the largest benchmark depth.",
+    )
+    try:
+        desired_context = int(context_text)
+        if desired_context <= 0:
+            raise ValueError
+    except ValueError:
+        show_message(stdscr, f"Invalid desired context: {context_text}")
+        return
+    try:
+        rec = calculate_offload(profile, desired_context=desired_context)
+    except OffloadError as exc:
+        show_message(stdscr, str(exc))
+        return
+    except Exception as exc:
+        show_message(stdscr, f"Failed to calculate offload: {exc}")
+        return
+    if confirm_auto_offload(stdscr, profile, rec):
+        profile.gpu_layers = rec.gpu_layers
+        profile.n_cpu_moe = rec.n_cpu_moe
+        show_message(stdscr, f"Applied gpu_layers={rec.gpu_layers}, n_cpu_moe={rec.n_cpu_moe}.")
+
+
+def default_offload_context(profile: Profile) -> str:
+    vals = [int(part.strip()) for part in profile.depths.split(",") if part.strip().isdigit()]
+    if vals:
+        return str(max(vals))
+    return "262144"
+
+
+def confirm_auto_offload(stdscr, profile: Profile, rec) -> bool:
+    lines = auto_offload_preview_lines(profile, rec)
+    return show_scroll_text(stdscr, "Apply auto-calculated offload?", lines, accept_text="Enter apply  •  q/Esc cancel")
+
+
+def auto_offload_preview_lines(profile: Profile, rec) -> list[str]:
+    model = rec.model
+    budget = rec.budget
+    candidate = rec.candidate
+    supports_moe = "unknown" if model.supports_moe is None else "yes" if model.supports_moe else "no"
+    lines = [
+        f"Model: {profile.model}",
+        f"Name: {model.name}",
+        f"Architecture: {model.architecture}",
+        f"Layers/block_count: {model.block_count}",
+        f"MoE support: {supports_moe}",
+        f"Experts: count={model.expert_count or 'unknown'} used={model.expert_used_count or 'unknown'}",
+        f"Tensor sizing: {'exact GGUF tensors' if model.exact_tensor_sizes else 'fallback estimate'}",
+        f"Confidence: {rec.confidence}",
+        "",
+        "Recommended changes:",
+        f"  gpu_layers/ngl: {profile.gpu_layers} -> {rec.gpu_layers}",
+        f"  n_cpu_moe:     {profile.n_cpu_moe} -> {rec.n_cpu_moe}",
+        "",
+        "Budgets and target:",
+        f"  Desired max context: {budget.desired_context} tokens",
+        f"  VRAM total: {format_bytes(budget.vram_total_bytes)}",
+        f"  VRAM free now: {format_bytes(budget.vram_free_bytes) if budget.vram_free_bytes is not None else 'unknown'}",
+        f"  RAM MemAvailable: {format_bytes(budget.ram_available_bytes)}",
+        f"  GPU runtime workspace: {format_bytes(budget.gpu_workspace_bytes)}",
+        f"  CPU runtime scratch: {format_bytes(budget.cpu_runtime_bytes)}",
+        "",
+        "Estimated selected split:",
+        f"  GPU weights: {format_bytes(candidate.gpu_weight_bytes)}",
+        f"  CPU/RAM weights: {format_bytes(candidate.cpu_weight_bytes)}",
+        f"  GPU KV cache: {format_bytes(candidate.gpu_kv_bytes)}",
+        f"  CPU KV cache: {format_bytes(candidate.cpu_kv_bytes)}",
+        f"  GPU total: {format_bytes(candidate.gpu_total_bytes)} / {format_bytes(budget.vram_total_bytes)}",
+        f"  RAM total: {format_bytes(candidate.cpu_total_bytes)} / {format_bytes(budget.ram_available_bytes)}",
+    ]
+    if candidate.gpu_over_bytes or candidate.cpu_over_bytes:
+        lines.extend([
+            "",
+            "Warning:",
+            f"  VRAM overage: {format_bytes(candidate.gpu_over_bytes)}",
+            f"  RAM overage: {format_bytes(candidate.cpu_over_bytes)}",
+        ])
+    lines.extend(["", "Explanation:"])
+    for line in rec.explanations:
+        lines.append(f"  {line}")
+    lines.extend(["", "Press Enter to apply these values, or q/Esc to cancel."])
+    return lines
 
 
 def copy_from_other_profile(stdscr, profile: Profile, other_profile: Profile | None) -> None:
