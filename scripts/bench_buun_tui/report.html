@@ -1,0 +1,148 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset=\"utf-8\">
+  <title>Buun llama-bench report</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    svg { border: 1px solid #ddd; width: 100%; height: auto; display: block; }
+    table { border-collapse: collapse; margin-top: 24px; font-size: 13px; }
+    th, td { border: 1px solid #ddd; padding: 4px 8px; vertical-align: top; }
+    th { background: #f4f4f4; }
+    pre { white-space: pre-wrap; background: #fff4f4; border: 1px solid #f0b8b8; padding: 12px; }
+    .error { color: #8a0000; }
+    .tabs { display: flex; gap: 8px; margin: 18px 0; border-bottom: 1px solid #ddd; }
+    .tab-btn { border: 1px solid #ddd; border-bottom: none; background: #f6f6f6; padding: 8px 12px; cursor: pointer; border-radius: 6px 6px 0 0; }
+    .tab-btn.active { background: white; font-weight: 600; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 24px; align-items: start; }
+    .chart { min-width: 0; }
+    .chart h2 { margin-bottom: 8px; }
+    .legend { font-size: 12px; columns: 1; }
+    .legend span { display: inline-block; width: 0.9em; height: 0.9em; margin-right: 0.35em; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <h1>Buun llama-bench report</h1>
+  <p>Separate charts are used for prompt processing (<code>pp*</code>) and generation (<code>tg*</code>) so the much faster prompt numbers do not flatten generation lines.</p>
+  <div class=\"tabs\">
+    <button class=\"tab-btn active\" data-tab=\"charts-tab\">Charts</button>
+    <button class=\"tab-btn\" data-tab=\"table-tab\">Raw table</button>
+  </div>
+  <section id=\"charts-tab\" class=\"tab-panel active\">
+    <h2>Throughput</h2>
+    <div id=\"charts\" class=\"charts-grid\"></div>
+    <h2>CPU/GPU offload</h2>
+    <div id=\"offload\" class=\"charts-grid\"></div>
+    <h2 class=\"error\" id=\"error-title\"></h2>
+    <div id=\"errors\"></div>
+  </section>
+  <section id=\"table-tab\" class=\"tab-panel\">
+    <h2>Raw rows</h2>
+    <table id=\"rows\"></table>
+  </section>
+<script>
+const rows = __ROWS_JSON__;
+const errors = __ERRORS_JSON__;
+document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById(btn.dataset.tab).classList.add('active');
+}));
+const colors = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+const fields = ['profile','model','model_layers','cpu_moe_layers','remaining_moe_layers','cache_strategy','test','n_depth','n_prompt','n_gen','n_batch','n_ubatch','n_threads','n_cpu_moe','n_gpu_layers','flash_attn','type_k','type_v','avg_ts','stddev_ts'];
+function num(x) { return Number(x || 0); }
+function testName(r) { return num(r.n_prompt) > 0 ? `pp${r.n_prompt}` : (num(r.n_gen) > 0 ? `tg${r.n_gen}` : 'unknown'); }
+function seriesKey(r) { return `${r.profile} ${r.model?.split('/').pop() ?? ''} ${r.cache_strategy} b=${r.n_batch} ub=${r.n_ubatch} t=${r.n_threads} moe=${r.n_cpu_moe} ngl=${r.n_gpu_layers} fa=${r.flash_attn}`; }
+function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function svgEl(svg, name, attrs) { const e = document.createElementNS('http://www.w3.org/2000/svg', name); for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v); svg.appendChild(e); return e; }
+function drawChart(title, chartRows) {
+  if (!chartRows.length) return;
+  const wrap = document.createElement('div'); wrap.className = 'chart';
+  wrap.innerHTML = `<h2>${esc(title)}</h2>`;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const W = 900, H = 460, L = 75, R = 25, T = 30, B = 65;
+  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); wrap.appendChild(svg);
+  const xs = chartRows.map(r => num(r.n_depth));
+  const ys = chartRows.map(r => num(r.avg_ts));
+  const xmin = Math.min(...xs, 0), xmax = Math.max(...xs, 1);
+  const ymin = 0, ymax = Math.max(...ys, 1) * 1.12;
+  const sx = x => L + (num(x)-xmin) / (xmax-xmin || 1) * (W-L-R);
+  const sy = y => H-B - (num(y)-ymin) / (ymax-ymin || 1) * (H-T-B);
+  svgEl(svg, 'line', {x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:'#333'});
+  svgEl(svg, 'line', {x1:L,y1:T,x2:L,y2:H-B,stroke:'#333'});
+  for (let i=0;i<=5;i++) {
+    const y = ymin + (ymax-ymin)*i/5, py = sy(y);
+    svgEl(svg, 'line', {x1:L,x2:W-R,y1:py,y2:py,stroke:'#eee'});
+    svgEl(svg, 'text', {x:8,y:py+4,fill:'#333'}).textContent = y.toFixed(1);
+  }
+  const xTicks = [...new Set(xs)].sort((a,b)=>a-b);
+  for (const x of xTicks) {
+    const px = sx(x);
+    svgEl(svg, 'line', {x1:px,x2:px,y1:H-B,y2:H-B+5,stroke:'#333'});
+    const t = svgEl(svg, 'text', {x:px,y:H-B+22,fill:'#333','text-anchor':'middle'}); t.textContent = x;
+  }
+  const groups = new Map();
+  for (const r of chartRows) { const k = seriesKey(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+  const legend = document.createElement('div'); legend.className = 'legend';
+  let ci = 0;
+  for (const [k, rs] of groups) {
+    const color = colors[ci++ % colors.length];
+    rs.sort((a,b)=>num(a.n_depth)-num(b.n_depth));
+    const pts = rs.map(r => `${sx(r.n_depth)},${sy(r.avg_ts)}`).join(' ');
+    svgEl(svg, 'polyline', {points:pts, fill:'none', stroke:color, 'stroke-width':2});
+    for (const r of rs) {
+      svgEl(svg, 'circle', {cx:sx(r.n_depth), cy:sy(r.avg_ts), r:4, fill:color});
+      svgEl(svg, 'title', {}).textContent = `${k} depth=${r.n_depth} avg_ts=${r.avg_ts}`;
+    }
+    const item = document.createElement('div'); item.innerHTML = `<span style=\"background:${color}\"></span>${esc(k)}`; legend.appendChild(item);
+  }
+  svgEl(svg, 'text', {x:(W-R+L)/2, y:H-15, fill:'#333','text-anchor':'middle'}).textContent = 'n_depth';
+  svgEl(svg, 'text', {x:8, y:18, fill:'#333'}).textContent = 'tokens/s';
+  wrap.appendChild(legend);
+  document.getElementById('charts').appendChild(wrap);
+}
+const rowsWithTest = rows.map(r => Object.assign({}, r, {test: r.test ?? testName(r)}));
+for (const t of [...new Set(rowsWithTest.map(r => r.test))].sort()) drawChart(t, rowsWithTest.filter(r => r.test === t));
+function drawOffloadChart() {
+  const seen = new Set();
+  const configs = [];
+  for (const r of rowsWithTest) {
+    const k = seriesKey(r);
+    if (!seen.has(k) && num(r.model_layers) > 0) { seen.add(k); configs.push(r); }
+  }
+  if (!configs.length) return;
+  const wrap = document.createElement('div'); wrap.className = 'chart';
+  wrap.innerHTML = '<h2>MoE expert placement by layer count</h2><p>CPU MoE layers come from <code>--n-cpu-moe</code>; remaining MoE layers are not forced to CPU. <code>n_gpu_layers</code> is shown in labels as the llama.cpp GPU layer setting.</p>';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const W = 900, rowH = 34, L = 260, R = 35, T = 25, B = 30, H = T + B + configs.length * rowH;
+  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); wrap.appendChild(svg);
+  const maxLayers = Math.max(...configs.map(r => num(r.model_layers)), 1);
+  const sx = x => L + num(x) / maxLayers * (W-L-R);
+  svgEl(svg, 'text', {x:L,y:16,fill:'#333'}).textContent = 'CPU MoE';
+  svgEl(svg, 'text', {x:L+95,y:16,fill:'#333'}).textContent = 'remaining MoE';
+  svgEl(svg, 'rect', {x:L+70,y:6,width:14,height:10,fill:'#d62728'});
+  svgEl(svg, 'rect', {x:L+180,y:6,width:14,height:10,fill:'#1f77b4'});
+  configs.forEach((r, i) => {
+    const y = T + i * rowH + 8;
+    const layers = num(r.model_layers), cpu = Math.min(layers, num(r.cpu_moe_layers)), rem = Math.max(0, layers - cpu);
+    svgEl(svg, 'text', {x:4,y:y+13,fill:'#333'}).textContent = `${r.profile} ${(r.model ?? '').split('/').pop()} ngl=${r.n_gpu_layers} ncmoe=${r.n_cpu_moe}`;
+    svgEl(svg, 'rect', {x:L,y:y,width:sx(cpu)-L,height:18,fill:'#d62728'});
+    svgEl(svg, 'rect', {x:sx(cpu),y:y,width:sx(cpu+rem)-sx(cpu),height:18,fill:'#1f77b4'});
+    svgEl(svg, 'rect', {x:L,y:y,width:sx(layers)-L,height:18,fill:'none',stroke:'#333'});
+    svgEl(svg, 'text', {x:sx(layers)+5,y:y+13,fill:'#333'}).textContent = `${cpu} CPU / ${rem} remaining / ${layers} total`;
+  });
+  document.getElementById('offload').appendChild(wrap);
+}
+drawOffloadChart();
+if (errors.length) {
+  document.getElementById('error-title').textContent = `Errors (${errors.length})`;
+  document.getElementById('errors').innerHTML = errors.map(e => `<h3>${esc(e.profile ?? 'run')} exit=${esc(e.returncode ?? '')}</h3><pre>${esc(e.stderr_tail ?? e.error ?? '')}</pre>`).join('');
+}
+const table = document.getElementById('rows');
+table.innerHTML = '<tr>' + fields.map(f => `<th>${f}</th>`).join('') + '</tr>' + rowsWithTest.map(r => '<tr>' + fields.map(f => `<td>${esc(r[f])}</td>`).join('') + '</tr>').join('');
+</script>
+</body>
+</html>
