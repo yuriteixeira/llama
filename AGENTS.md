@@ -151,6 +151,10 @@ Tuned for:
 - **RAM:** 16+ GB system RAM recommended
 - **CPU:** 12+ threads available
 
+## Development Guidelines
+
+- Use Conventional Commits for commit messages, matching the existing history (for example, `feat(scope): summary`, `fix(scope): summary`). Include a concise commit body explaining what motivated the change and add links to external references when applicable.
+
 ## Related Resources
 
 - **Clues / Moises' notes:** `docs/clues.md` — includes Moises' setup configuration and benchmark results from an identical GPU/RAM configuration

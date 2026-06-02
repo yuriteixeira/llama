@@ -648,6 +648,23 @@ def wrap_text(text: str, width: int) -> list[str]:
     return lines or [""]
 
 
+def draw_description_header(stdscr, start_row: int, description: str, max_lines: int = 6) -> int:
+    """Draw a bordered description hint and return the next usable row."""
+    if not description:
+        return start_row
+    width = max(20, curses.COLS - 1)
+    inner_width = max(1, width - 4)
+    lines = wrap_text(description, inner_width)[:max_lines]
+    border = "+" + "-" * (width - 2) + "+"
+    stdscr.addstr(start_row, 0, border[: curses.COLS - 1])
+    row = start_row + 1
+    for line in lines:
+        stdscr.addstr(row, 0, ("| " + line.ljust(inner_width) + " |")[: curses.COLS - 1])
+        row += 1
+    stdscr.addstr(row, 0, border[: curses.COLS - 1])
+    return row + 2
+
+
 def prompt_text(stdscr, title: str, initial: str, description: str = "") -> str:
     """Small editable text prompt with a visible cursor."""
     value = list(initial)
@@ -657,12 +674,7 @@ def prompt_text(stdscr, title: str, initial: str, description: str = "") -> str:
         while True:
             stdscr.clear()
             stdscr.addstr(0, 0, title[: curses.COLS - 1])
-            row = 1
-            if description:
-                for line in wrap_text(description, curses.COLS - 1)[:4]:
-                    stdscr.addstr(row, 0, line[: curses.COLS - 1])
-                    row += 1
-                row += 1
+            row = draw_description_header(stdscr, 2, description)
             stdscr.addstr(row, 0, "Enter accept, Esc cancel, arrows move, Backspace delete"[: curses.COLS - 1])
             row += 2
             visible_width = max(1, curses.COLS - 1)
@@ -703,12 +715,7 @@ def choose_from(stdscr, title: str, options: list[str], current: str, descriptio
     while True:
         stdscr.clear()
         stdscr.addstr(0, 0, title)
-        row = 1
-        if description:
-            for line in wrap_text(description, curses.COLS - 1)[:4]:
-                stdscr.addstr(row, 0, line[: curses.COLS - 1])
-                row += 1
-            row += 1
+        row = draw_description_header(stdscr, 2, description)
         help_text = "↑/↓ select, Enter accept, q cancel"
         if allow_edit:
             help_text += ", Tab edit highlighted"
