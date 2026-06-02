@@ -18,6 +18,8 @@ Services are installed to `~/.config/systemd/user/` on first use. They auto-rest
 
 ### Benchmark Scripts
 - `./scripts/bench-buun-tui.py` - Runs `llama-bench` after the user sets comparison params through a TUI
+- `./scripts/rank-buun-results.py` — Ranks finalized buun TUI benchmark runs
+- `./scripts/update-buun-model-presets.py` — Updates `versions/buun/model-presets.ini` from the best recorded buun benchmark results; also available from the TUI and run automatically after ranking updates. Fixed llama-server args can be pasted into `versions/buun/model-preset-fixed-args.txt`.
 - `./scripts/bench-llama-suite.py` — Full llama.cpp benchmark suite
 - `./scripts/run-llama-bench-matrix.py` — Matrix benchmark across configs
 

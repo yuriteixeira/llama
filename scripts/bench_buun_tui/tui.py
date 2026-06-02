@@ -4,7 +4,10 @@ import copy
 import curses
 import json
 import logging
+import re
 import shlex
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +38,7 @@ from .models import (
 from .offload import OffloadError, calculate_offload, format_bytes
 from .process_stream import StreamStatus
 from .repair import diagnose_failure, next_repair_step
-from .paths import CONFIG_DIR
+from .paths import CONFIG_DIR, ROOT
 from .profile import BenchConfig, CACHE_STRATEGIES, FIELD_DESCRIPTIONS, PRESETS, Profile, apply_cache_strategy, cache_types_text, resolve_cache_types
 from .smoke import run_smoke_test, smoke_test_command, smoke_test_context
 
@@ -50,6 +53,7 @@ def new_default_config(models: list[str]) -> BenchConfig:
 
 
 def tui_main(stdscr, cfg: BenchConfig | None = None, report_url: str = "") -> Path | None:
+    init_colors()
     curses.curs_set(0)
     draw_loading_screen(stdscr, "Loading Buun TUI", "Scanning model files...")
     models = find_models()
@@ -62,17 +66,20 @@ class TuiState:
         self.cfg = cfg
         self.report_url = report_url
         self.models = models or find_models()
-        self.selected = 0
         self.actions = [
             "Load saved config",
             "Scan models and research best-known params",
+            "Update model presets from best results",
             "Edit run prefix",
+            "Choose profiles to run",
+            "Invert profile configs",
             "Edit profile_a",
             "Edit profile_b",
             "Save config",
             "Save config and run",
             "Quit",
         ]
+        self.selected = self.actions.index("Edit profile_a")
 
 
 def main_menu(stdscr, state: TuiState) -> Path | None:
@@ -86,18 +93,33 @@ def main_menu(stdscr, state: TuiState) -> Path | None:
 def draw_main_menu(stdscr, state: TuiState) -> None:
     stdscr.clear()
     layout = main_menu_layout()
-    draw_header_panel(stdscr, layout["header"], state.cfg.run_prefix, state.report_url)
+    draw_header_panel(stdscr, layout["header"], state.cfg.run_prefix, state.report_url, state.cfg.run_profiles)
     draw_actions_panel(stdscr, layout["actions"], state.actions, state.selected)
-    draw_profiles_panel(stdscr, layout["profiles"], state.cfg.profiles)
-    draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Enter select  •  q/Esc quit")
+    draw_profiles_panel(stdscr, layout["profiles"], state.cfg.profiles, state.cfg.run_profiles)
+    draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Tab jump section  •  Enter select  •  q/Esc quit")
 
 
-def draw_header_panel(stdscr, panel: "Panel", run_prefix: str, report_url: str = "") -> None:
+def draw_header_panel(stdscr, panel: "Panel", run_prefix: str, report_url: str = "", run_profiles: str = "both") -> None:
     draw_panel(stdscr, panel, "Buun llama-bench TUI")
-    write_in_panel(stdscr, panel, 0, "Configure two reproducible benchmark profiles")
-    write_in_panel(stdscr, panel, 1, f"Run prefix: {run_prefix}")
+    write_in_panel(stdscr, panel, 0, "Configure reproducible benchmark profiles")
+    write_in_panel(stdscr, panel, 1, f"Run prefix: {run_prefix}  •  Profiles to run: {run_profiles_label(run_profiles)}")
     if report_url:
         write_in_panel(stdscr, panel, 2, f"Reports: {report_url}")
+
+
+def run_profiles_label(value: str) -> str:
+    value = (value or "both").strip()
+    if value in {"both", "all", ""}:
+        return "both"
+    return value
+
+
+def enabled_profile_names(run_profiles: str, profiles: list[Profile]) -> set[str]:
+    choice = (run_profiles or "both").strip().lower()
+    if choice in {"both", "all", ""}:
+        return {profile.name for profile in profiles}
+    names = {part.strip() for part in choice.split(",") if part.strip()}
+    return {profile.name for profile in profiles if profile.name in names}
 
 
 def draw_actions_panel(stdscr, panel: "Panel", actions: list[str], selected: int) -> None:
@@ -106,10 +128,10 @@ def draw_actions_panel(stdscr, panel: "Panel", actions: list[str], selected: int
     for i, action in enumerate(actions):
         if row >= panel.inner_height:
             return
-        attr = curses.A_REVERSE if i == selected else curses.A_NORMAL
+        attr = selected_attr() if i == selected else curses.A_NORMAL
         write_in_panel(stdscr, panel, row, f"> {action}" if i == selected else f"  {action}", attr)
         row += 1
-        if i in {1, 4} and row < panel.inner_height:
+        if i in {2, 7} and row < panel.inner_height:
             write_action_separator(stdscr, panel, row)
             row += 1
 
@@ -118,16 +140,18 @@ def write_action_separator(stdscr, panel: "Panel", row: int) -> None:
     write_in_panel(stdscr, panel, row, "─" * panel.inner_width)
 
 
-def draw_profiles_panel(stdscr, panel: "Panel", profiles: list[Profile]) -> None:
+def draw_profiles_panel(stdscr, panel: "Panel", profiles: list[Profile], run_profiles: str = "both") -> None:
     draw_panel(stdscr, panel, "Profiles")
     row = 0
+    enabled = enabled_profile_names(run_profiles, profiles)
     for profile in profiles:
-        row = draw_profile_summary(stdscr, panel, profile, row)
+        row = draw_profile_summary(stdscr, panel, profile, row, profile.name in enabled)
 
 
-def draw_profile_summary(stdscr, panel: "Panel", profile: Profile, row: int) -> int:
+def draw_profile_summary(stdscr, panel: "Panel", profile: Profile, row: int, enabled: bool = True) -> int:
+    status = "RUN" if enabled else "SKIP"
     lines = [
-        f"{profile.name}: {model_label(profile.model)}",
+        f"{profile.name} [{status}]: {model_label(profile.model)}",
         f"cache={profile.cache_strategy} kv={cache_types_text(profile)} depths={profile.depths}",
         f"batch={profile.batch_size} ubatch={profile.ubatch_size} threads={profile.threads}",
         f"moe={profile.n_cpu_moe} ngl={profile.gpu_layers} fa={profile.flash_attn} mmap={profile.no_mmap}",
@@ -135,7 +159,7 @@ def draw_profile_summary(stdscr, panel: "Panel", profile: Profile, row: int) -> 
     for line in lines:
         if row >= panel.inner_height:
             return row
-        write_in_panel(stdscr, panel, row, line)
+        write_in_panel(stdscr, panel, row, line, important_line_attr(line))
         row += 1
     if row < panel.inner_height:
         write_in_panel(stdscr, panel, row, "")
@@ -153,11 +177,32 @@ def handle_main_menu_key(stdscr, state: TuiState, key: int):
         state.selected = (state.selected - 1) % len(state.actions)
     elif key in (curses.KEY_DOWN, ord("j")):
         state.selected = (state.selected + 1) % len(state.actions)
+    elif key == 9:
+        state.selected = jump_to_menu_section(state.selected, main_menu_section_starts(state.actions), len(state.actions), 1)
+    elif key == getattr(curses, "KEY_BTAB", -1):
+        state.selected = jump_to_menu_section(state.selected, main_menu_section_starts(state.actions), len(state.actions), -1)
     elif key in (ord("q"), 27):
         return None
     elif key in (10, 13):
         return handle_main_action(stdscr, state)
     return False
+
+
+def main_menu_section_starts(actions: list[str]) -> list[int]:
+    # Keep these aligned with visual separators in draw_actions_panel().
+    starts = [0, 3, 8]
+    return [start for start in starts if start < len(actions)] or [0]
+
+
+def jump_to_menu_section(selected: int, section_starts: list[int], item_count: int, direction: int) -> int:
+    if item_count <= 0:
+        return 0
+    starts = sorted({max(0, min(start, item_count - 1)) for start in section_starts})
+    if not starts:
+        return selected
+    current_section = max((i for i, start in enumerate(starts) if start <= selected), default=0)
+    next_section = (current_section + (1 if direction >= 0 else -1)) % len(starts)
+    return starts[next_section]
 
 
 def handle_main_action(stdscr, state: TuiState):
@@ -167,20 +212,55 @@ def handle_main_action(stdscr, state: TuiState):
     elif selected == 1:
         research_best_known_action(stdscr)
     elif selected == 2:
+        update_model_presets_action(stdscr)
+    elif selected == 3:
         edit_run_prefix_action(stdscr, state)
-    elif selected in (3, 4):
-        profile_idx = selected - 3
+    elif selected == 4:
+        choose_profiles_to_run_action(stdscr, state)
+    elif selected == 5:
+        invert_profile_configs(state.cfg.profiles)
+        show_message(stdscr, "Profile configs inverted.")
+    elif selected in (6, 7):
+        profile_idx = selected - 6
         other_idx = 1 - profile_idx
         edit_profile(stdscr, state.cfg.profiles[profile_idx], state.models, state.cfg.profiles[other_idx])
-    elif selected in (5, 6):
-        return save_config_action(stdscr, state.cfg, run_after_save=selected == 6)
-    elif selected == 7:
+    elif selected in (8, 9):
+        return save_config_action(stdscr, state.cfg, run_after_save=selected == 9)
+    elif selected == 10:
         return None
     return False
 
 
 def research_best_known_action(stdscr) -> None:
     run_best_known_research_with_popup(stdscr)
+
+
+def update_model_presets_action(stdscr) -> None:
+    script = ROOT / "scripts" / "update-buun-model-presets.py"
+    cmd = [sys.executable, str(script)]
+    show_status(stdscr, "Updating model presets from best benchmark results...", str(script))
+    proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
+    lines = [
+        f"Command: {subprocess.list2cmdline(cmd)}",
+        f"Return code: {proc.returncode}",
+    ]
+    if proc.stdout.strip():
+        lines.extend(["", "Output:", *proc.stdout.rstrip().splitlines()])
+    if proc.stderr.strip():
+        lines.extend(["", "Errors:", *proc.stderr.rstrip().splitlines()])
+    if proc.returncode == 0:
+        lines.extend(["", "Updated: versions/buun/model-presets.ini"])
+    show_scroll_text(stdscr, "Model preset update", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+
+
+def invert_profile_configs(profiles: list[Profile]) -> None:
+    if len(profiles) < 2:
+        return
+    first_name = profiles[0].name
+    second_name = profiles[1].name
+    profiles[0], profiles[1] = profiles[1], profiles[0]
+    profiles[0].name = first_name
+    profiles[1].name = second_name
 
 
 def run_best_known_research_with_popup(stdscr, models: list[str] | None = None) -> bool:
@@ -245,13 +325,13 @@ def draw_output_popup(stdscr, title: str, lines: list[str], footer: str) -> None
     left = max(0, (cols - width) // 2)
     win = curses.newwin(height, width, top, left)
     win.box()
-    safe_addstr(win, 0, 2, f" {title} "[: max(0, width - 4)], curses.A_BOLD)
+    safe_addstr(win, 0, 2, f" {title} "[: max(0, width - 4)], title_attr())
     body_height = max(1, height - 4)
     body_width = max(1, width - 4)
     visible = wrap_lines_for_screen(lines, body_width)[-body_height:]
     for row, line in enumerate(visible, start=1):
-        safe_addstr(win, row, 2, line[:body_width])
-    safe_addstr(win, height - 2, 2, footer[:body_width])
+        safe_addstr_highlighted(win, row, 2, line[:body_width], body_width)
+    safe_addstr(win, height - 2, 2, footer[:body_width], footer_attr())
     stdscr.refresh()
     win.refresh()
 
@@ -304,8 +384,8 @@ def show_status(stdscr, title: str, detail: str = "") -> None:
 def draw_loading_screen(stdscr, title: str, detail: str) -> None:
     stdscr.clear()
     rows, cols = screen_size()
-    safe_addstr(stdscr, max(0, rows // 2 - 1), max(0, (cols - len(title)) // 2), title, curses.A_BOLD)
-    safe_addstr(stdscr, max(0, rows // 2 + 1), max(0, (cols - len(detail)) // 2), detail)
+    safe_addstr(stdscr, max(0, rows // 2 - 1), max(0, (cols - len(title)) // 2), title, title_attr())
+    safe_addstr(stdscr, max(0, rows // 2 + 1), max(0, (cols - len(detail)) // 2), detail, value_attr())
     stdscr.refresh()
 
 
@@ -337,6 +417,20 @@ def edit_run_prefix_action(stdscr, state: TuiState) -> None:
     )
 
 
+def choose_profiles_to_run_action(stdscr, state: TuiState) -> None:
+    profile_names = [profile.name for profile in state.cfg.profiles]
+    options = ["both", *profile_names]
+    current = state.cfg.run_profiles if state.cfg.run_profiles in options else "both"
+    picked = choose_from(
+        stdscr,
+        "Choose profiles to run",
+        options,
+        current,
+        "Select both profiles or only one profile for the next saved benchmark run.",
+    )
+    state.cfg.run_profiles = picked
+
+
 def save_config_action(stdscr, cfg: BenchConfig, run_after_save: bool) -> Path | bool:
     path = CONFIG_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{slugify(cfg.run_prefix)}.ini"
     save_config(cfg, path)
@@ -361,12 +455,12 @@ def show_scroll_text(stdscr, title: str, lines: list[str], accept_text: str, ent
         stdscr.clear()
         rows, cols = screen_size()
         body_height = max(1, rows - 4)
-        safe_addstr(stdscr, 0, 0, title[: cols - 1], curses.A_BOLD)
+        safe_addstr(stdscr, 0, 0, title[: cols - 1], title_attr())
         visible_lines = wrap_lines_for_screen(lines, cols - 1)
         top = max(0, min(top, max(0, len(visible_lines) - body_height)))
         for row, line in enumerate(visible_lines[top : top + body_height], start=1):
-            safe_addstr(stdscr, row, 0, line)
-        safe_addstr(stdscr, rows - 2, 0, accept_text[: cols - 1])
+            safe_addstr_highlighted(stdscr, row, 0, line, cols - 1)
+        safe_addstr(stdscr, rows - 2, 0, accept_text[: cols - 1], footer_attr())
         key = stdscr.getch()
         if key in (curses.KEY_UP, ord("k")):
             top -= 1
@@ -402,38 +496,60 @@ PROFILE_ACTIONS = {
 
 
 def edit_profile(stdscr, profile: Profile, models: list[str], other_profile: Profile | None = None) -> None:
-    fields = list(PROFILE_ACTIONS) + [k for k, _ in profile.items()]
+    actions = list(PROFILE_ACTIONS)
+    params = [k for k, _ in profile.items()]
+    entries = params + actions
     idx = 0
     scroll = 0
     while True:
         layout = profile_editor_layout()
-        visible_rows = layout["fields"].inner_height - 1 if len(fields) > layout["fields"].inner_height else layout["fields"].inner_height
-        draw_profile_editor(stdscr, profile, fields, idx, scroll)
+        visible_rows = layout["fields"].inner_height - 1 if len(params) > layout["fields"].inner_height else layout["fields"].inner_height
+        draw_profile_editor(stdscr, profile, actions, params, idx, scroll)
         key = stdscr.getch()
         if key in (curses.KEY_UP, ord("k")):
-            idx = (idx - 1) % len(fields)
+            idx = (idx - 1) % len(entries)
         elif key in (curses.KEY_DOWN, ord("j")):
-            idx = (idx + 1) % len(fields)
+            idx = (idx + 1) % len(entries)
+        elif key == 9:
+            idx = jump_to_menu_section(idx, profile_editor_section_starts(actions, params), len(entries), 1)
+        elif key == getattr(curses, "KEY_BTAB", -1):
+            idx = jump_to_menu_section(idx, profile_editor_section_starts(actions, params), len(entries), -1)
         elif key in (ord("q"), 27):
             return
         elif key in (10, 13):
-            handle_profile_editor_selection(stdscr, profile, fields[idx], models, other_profile)
-        scroll = adjust_profile_scroll(idx, scroll, fields, visible_rows)
+            handle_profile_editor_selection(stdscr, profile, entries[idx], models, other_profile)
+        if idx < len(params):
+            scroll = adjust_profile_scroll(idx, scroll, params, visible_rows)
 
 
-def draw_profile_editor(stdscr, profile: Profile, fields: list[str], idx: int, scroll: int) -> None:
+def profile_editor_section_starts(actions: list[str], params: list[str]) -> list[int]:
+    starts = [0]
+    if actions:
+        starts.append(len(params))
+    return starts
+
+
+def draw_profile_editor(stdscr, profile: Profile, actions: list[str], params: list[str], idx: int, scroll: int) -> None:
     stdscr.clear()
     layout = profile_editor_layout()
     draw_profile_editor_header(stdscr, layout["header"], profile)
-    draw_profile_fields_panel(stdscr, layout["fields"], profile, fields, idx, scroll)
-    draw_selected_field_panel(stdscr, layout["details"], profile, fields[idx])
-    draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Enter edit  •  q/Esc back")
+    draw_profile_fields_panel(stdscr, layout["fields"], profile, params, idx if idx < len(params) else -1, scroll)
+    draw_profile_actions_panel(stdscr, layout["actions"], actions, idx - len(params))
+    draw_selected_field_panel(stdscr, layout["details"], profile, (params + actions)[idx])
+    draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Tab params/actions  •  Enter edit  •  q/Esc back")
 
 
 def draw_profile_editor_header(stdscr, panel: "Panel", profile: Profile) -> None:
     draw_panel(stdscr, panel, f"Editing {profile.name}")
     write_in_panel(stdscr, panel, 0, model_label(profile.model))
     write_in_panel(stdscr, panel, 1, f"cache={profile.cache_strategy} kv={cache_types_text(profile)} depths={profile.depths}")
+
+
+def draw_profile_actions_panel(stdscr, panel: "Panel", actions: list[str], idx: int) -> None:
+    draw_panel(stdscr, panel, "Actions")
+    for row, key in enumerate(actions[: panel.inner_height]):
+        attr = selected_attr() if row == idx else action_attr()
+        write_in_panel(stdscr, panel, row, f"▶ {PROFILE_ACTIONS[key]}", attr)
 
 
 def draw_profile_fields_panel(stdscr, panel: "Panel", profile: Profile, fields: list[str], idx: int, scroll: int) -> None:
@@ -444,10 +560,7 @@ def draw_profile_fields_panel(stdscr, panel: "Panel", profile: Profile, fields: 
     visible = fields[start : start + visible_rows]
     for row, key in enumerate(visible):
         field_idx = start + row
-        attr = curses.A_REVERSE if field_idx == idx else curses.A_NORMAL
-        if key in PROFILE_ACTIONS:
-            write_in_panel(stdscr, panel, row, f"▶ {PROFILE_ACTIONS[key]}", attr)
-            continue
+        attr = selected_attr() if field_idx == idx else field_attr(key)
         value = getattr(profile, key)
         shown = model_label(value) if key == "model" and value else value
         write_in_panel(stdscr, panel, row, f"{key:15} {shown}", attr)
@@ -609,8 +722,7 @@ def auto_offload_preview_lines(profile: Profile, rec) -> list[str]:
         f"Confidence: {rec.confidence}",
         "",
         "Recommended changes:",
-        f"  gpu_layers/ngl: {profile.gpu_layers} -> {rec.gpu_layers}",
-        f"  n_cpu_moe:     {profile.n_cpu_moe} -> {rec.n_cpu_moe}",
+        *change_lines([("gpu_layers/ngl", profile.gpu_layers, rec.gpu_layers), ("n_cpu_moe", profile.n_cpu_moe, rec.n_cpu_moe)]),
         "",
         "Budgets and target:",
         f"  Desired max context: {budget.desired_context} tokens",
@@ -760,7 +872,7 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
             if step is None:
                 show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
                 return False
-            lines.extend(["", f"Next repair step: {step.label}", f"  gpu_layers -> {step.gpu_layers}", f"  n_cpu_moe -> {step.n_cpu_moe}"])
+            lines.extend(["", f"Next repair step: {step.label}", *change_lines([("gpu_layers", profile.gpu_layers, step.gpu_layers), ("n_cpu_moe", profile.n_cpu_moe, step.n_cpu_moe)])])
             if not show_scroll_text(stdscr, "Smoke test result", lines, accept_text="Enter apply repair  •  q/Esc stop", enter_accepts=False):
                 return False
             tried.add((profile.gpu_layers, profile.n_cpu_moe))
@@ -802,14 +914,13 @@ def confirm_copy_from_other_profile(stdscr, profile: Profile, other_profile: Pro
         "",
         "Changes:",
     ]
-    for key in copy_profile_param_keys(profile):
-        lines.append(f"  {key}: {getattr(profile, key)} -> {getattr(other_profile, key)}")
+    lines.extend(change_lines((key, getattr(profile, key), getattr(other_profile, key)) for key in copy_profile_param_keys(profile)))
     lines.extend(["", "Press Enter to copy these params, or q/Esc to cancel."])
     return show_scroll_text(stdscr, "Copy bench params?", lines, accept_text="Enter copy  •  q/Esc cancel")
 
 
 def copy_profile_params(profile: Profile, other_profile: Profile) -> list[str]:
-    keys = copy_profile_param_keys(profile)
+    keys = [key for key in copy_profile_param_keys(profile) if values_differ(getattr(profile, key), getattr(other_profile, key))]
     for key in keys:
         setattr(profile, key, getattr(other_profile, key))
     return keys
@@ -817,6 +928,30 @@ def copy_profile_params(profile: Profile, other_profile: Profile) -> list[str]:
 
 def copy_profile_param_keys(profile: Profile) -> list[str]:
     return [key for key, _ in profile.items() if key != "model"]
+
+
+def auto_load_best_known_for_profile(stdscr, profile: Profile) -> None:
+    if not profile.model:
+        return
+    recs = find_recommendations(profile.model)
+    if not recs:
+        return
+    rec = recs[0]
+    plan = build_apply_plan(rec)
+    changed = [(key, getattr(profile, key), value) for key, value in plan.applied.items() if values_differ(getattr(profile, key), value)]
+    apply_recommendation(profile, rec)
+    lines = [
+        f"Model selected: {model_label(profile.model)}",
+        f"Auto-loaded best-known params from {rec.section}.",
+        "",
+        "Applied:",
+        *change_lines(changed),
+    ]
+    if len(recs) > 1:
+        lines.extend(["", f"Note: {len(recs)} recommendations matched; automatically used the first match."])
+    if plan.invalid:
+        lines.extend(["", "Invalid/not applied:", *[f"  {k}: {v}" for k, v in plan.invalid.items()]])
+    show_scroll_text(stdscr, "Best-known params auto-loaded", lines, accept_text="q/Esc/Enter continue", enter_accepts=True)
 
 
 def load_best_known_for_profile(stdscr, profile: Profile) -> None:
@@ -883,10 +1018,10 @@ def recommendation_preview_lines(profile: Profile, rec, plan) -> list[str]:
         "",
         "Changes:",
     ]
-    if not plan.applied:
-        lines.append("  No valid profile params to apply.")
-    for key, value in plan.applied.items():
-        lines.append(f"  {key}: {getattr(profile, key)} -> {value}")
+    applied_changes = [(key, getattr(profile, key), value) for key, value in plan.applied.items() if values_differ(getattr(profile, key), value)]
+    if not applied_changes:
+        lines.append("  No valid profile params would change.")
+    lines.extend(change_lines(applied_changes))
     if plan.invalid:
         lines.extend(["", "Invalid/not applied:"])
         lines.extend(f"  {k}: {v}" for k, v in plan.invalid.items())
@@ -907,6 +1042,15 @@ def recommendation_preview_lines(profile: Profile, rec, plan) -> list[str]:
             lines.extend(["", "  Response:", response.strip() or "(empty response)"])
     lines.extend(["", "Press Enter to apply these valid params, or q/Esc to cancel."])
     return lines
+
+
+def values_differ(old, new) -> bool:
+    return str(old) != str(new)
+
+
+def change_lines(changes) -> list[str]:
+    lines = [f"  {key}: {old} -> {new}" for key, old, new in changes if values_differ(old, new)]
+    return lines or ["  No changes."]
 
 
 def show_server_command(stdscr, profile: Profile) -> None:
@@ -933,7 +1077,9 @@ def edit_profile_field(stdscr, profile: Profile, field: str, models: list[str]) 
             apply_cache_strategy(profile, new_value)
         return
     if field == "model":
-        setattr(profile, field, new_value)
+        if new_value != profile.model:
+            setattr(profile, field, new_value)
+            auto_load_best_known_for_profile(stdscr, profile)
         reconcile_cache_types_for_model(profile)
         return
     setattr(profile, field, new_value)
@@ -1052,7 +1198,7 @@ def draw_options_panel(stdscr, panel: "Panel", options: list[str], idx: int) -> 
     start = visible_window_start(idx, panel.inner_height, len(options))
     for row, opt_idx in enumerate(range(start, min(len(options), start + panel.inner_height))):
         marker = "> " if opt_idx == idx else "  "
-        attr = curses.A_REVERSE if opt_idx == idx else curses.A_NORMAL
+        attr = selected_attr() if opt_idx == idx else important_line_attr(options[opt_idx])
         write_in_panel(stdscr, panel, row, marker + options[opt_idx], attr)
 
 
@@ -1121,6 +1267,93 @@ def handle_text_key(key: int, value: list[str], pos: int, initial: str) -> int |
     return pos
 
 
+COLOR_BORDER = 1
+COLOR_TITLE = 2
+COLOR_SELECTED = 3
+COLOR_VALUE = 4
+COLOR_METRIC = 5
+COLOR_WARNING = 6
+COLOR_ERROR = 7
+COLOR_MUTED = 8
+COLOR_ACTION = 9
+
+METRIC_RE = re.compile(
+    r"(^|\b)(avg_ts|stddev_ts|tok/s|tokens?|wall|elapsed|throughput|vram|ram|gpu|cpu|batch|ubatch|threads|ngl|moe|layers|context|cache|confidence|return code)\b|\d+(?:\.\d+)?\s*(?:tok/s|tokens?|s|ms|gb|gib|mb|mib|%)",
+    re.IGNORECASE,
+)
+CHANGE_RE = re.compile(r"\s->\s")
+ERROR_RE = re.compile(r"\b(error|failed|failure|warning|overage|invalid|timeout|timed out|cancelled|diagnosis:)\b", re.IGNORECASE)
+SUCCESS_RE = re.compile(r"\b(passed|saved|applied|recommended|recommendation|success)\b", re.IGNORECASE)
+
+
+def init_colors() -> None:
+    if not curses.has_colors():
+        return
+    try:
+        curses.start_color()
+        bg = curses.COLOR_BLACK
+        if hasattr(curses, "use_default_colors"):
+            curses.use_default_colors()
+            bg = -1
+        curses.init_pair(COLOR_BORDER, curses.COLOR_CYAN, bg)
+        curses.init_pair(COLOR_TITLE, curses.COLOR_YELLOW, bg)
+        curses.init_pair(COLOR_SELECTED, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+        curses.init_pair(COLOR_VALUE, curses.COLOR_GREEN, bg)
+        curses.init_pair(COLOR_METRIC, curses.COLOR_CYAN, bg)
+        curses.init_pair(COLOR_WARNING, curses.COLOR_MAGENTA, bg)
+        curses.init_pair(COLOR_ERROR, curses.COLOR_RED, bg)
+        curses.init_pair(COLOR_MUTED, curses.COLOR_BLUE, bg)
+        curses.init_pair(COLOR_ACTION, curses.COLOR_WHITE, bg)
+    except curses.error:
+        pass
+
+
+def color_pair(pair: int) -> int:
+    try:
+        return curses.color_pair(pair) if curses.has_colors() else curses.A_NORMAL
+    except curses.error:
+        return curses.A_NORMAL
+
+
+def border_attr() -> int:
+    return color_pair(COLOR_BORDER) | curses.A_DIM
+
+
+def title_attr() -> int:
+    return color_pair(COLOR_TITLE) | curses.A_BOLD
+
+
+def selected_attr() -> int:
+    return color_pair(COLOR_SELECTED) | curses.A_BOLD
+
+
+def value_attr() -> int:
+    return color_pair(COLOR_VALUE) | curses.A_BOLD
+
+
+def footer_attr() -> int:
+    return color_pair(COLOR_MUTED) | curses.A_BOLD
+
+
+def action_attr() -> int:
+    return color_pair(COLOR_ACTION)
+
+
+def field_attr(field: str) -> int:
+    important = {"model", "gpu_layers", "n_cpu_moe", "batch_size", "ubatch_size", "threads", "depths", "cache_strategy", "cache_type_k", "cache_type_v"}
+    return value_attr() if field in important else curses.A_NORMAL
+
+
+def important_line_attr(line: str) -> int:
+    if ERROR_RE.search(line):
+        return color_pair(COLOR_ERROR) | curses.A_BOLD
+    if METRIC_RE.search(line):
+        return color_pair(COLOR_METRIC) | curses.A_BOLD
+    if SUCCESS_RE.search(line):
+        return value_attr()
+    return curses.A_NORMAL
+
+
 @dataclass(frozen=True)
 class Panel:
     row: int
@@ -1157,9 +1390,12 @@ def profile_editor_layout() -> dict[str, Panel]:
     help_panel = Panel(max(0, rows - 3), 0, min(3, rows), cols)
     body_height = max(1, rows - header.height - help_panel.height)
     left_width = responsive_split_width(cols, preferred_min=36, preferred_max=56)
+    actions_height = min(max(1, body_height - 1), max(3, len(PROFILE_ACTIONS) + 2))
+    fields_height = max(1, body_height - actions_height)
     return {
         "header": header,
-        "fields": Panel(header.height, 0, body_height, left_width),
+        "fields": Panel(header.height, 0, fields_height, left_width),
+        "actions": Panel(header.height + fields_height, 0, actions_height, left_width),
         "details": Panel(header.height, left_width, body_height, max(1, cols - left_width)),
         "help": help_panel,
     }
@@ -1215,12 +1451,13 @@ def draw_panel(stdscr, panel: Panel, title: str = "") -> None:
     if panel.height <= 0 or panel.width <= 1:
         return
     horizontal = "─" * max(0, panel.width - 2)
-    safe_addstr(stdscr, panel.row, panel.col, "┌" + horizontal + "┐")
+    border = border_attr()
+    safe_addstr(stdscr, panel.row, panel.col, "┌" + horizontal + "┐", border)
     for row in range(panel.row + 1, panel.row + panel.height - 1):
-        safe_addstr(stdscr, row, panel.col, "│" + " " * max(0, panel.width - 2) + "│")
-    safe_addstr(stdscr, panel.row + panel.height - 1, panel.col, "└" + horizontal + "┘")
+        safe_addstr(stdscr, row, panel.col, "│" + " " * max(0, panel.width - 2) + "│", border)
+    safe_addstr(stdscr, panel.row + panel.height - 1, panel.col, "└" + horizontal + "┘", border)
     if title:
-        safe_addstr(stdscr, panel.row, panel.col + 2, f" {title} "[: max(0, panel.width - 4)], curses.A_BOLD)
+        safe_addstr(stdscr, panel.row, panel.col + 2, f" {title} "[: max(0, panel.width - 4)], title_attr())
 
 
 def write_in_panel(stdscr, panel: Panel, row: int, text: str, attr: int = curses.A_NORMAL) -> None:
@@ -1236,6 +1473,38 @@ def safe_addstr(stdscr, row: int, col: int, text: str, attr: int = curses.A_NORM
         stdscr.addstr(row, col, text[: max(0, curses.COLS - col - 1)], attr)
     except curses.error:
         pass
+
+
+def safe_addstr_highlighted(stdscr, row: int, col: int, text: str, width: int) -> None:
+    if CHANGE_RE.search(text):
+        write_change_segments(stdscr, row, col, text, width)
+        return
+    safe_addstr(stdscr, row, col, text[:width], important_line_attr(text))
+
+
+def write_change_segments(stdscr, row: int, col: int, text: str, width: int) -> None:
+    match = re.match(r"^(?P<prefix>.*?:\s*)(?P<old>.*?)\s*(?P<arrow>->)\s*(?P<new>.*)$", text)
+    if match:
+        segments = [
+            (match.group("prefix"), curses.A_NORMAL),
+            (match.group("old"), color_pair(COLOR_WARNING) | curses.A_BOLD),
+            (" -> ", footer_attr()),
+            (match.group("new"), color_pair(COLOR_WARNING) | curses.A_BOLD),
+        ]
+    else:
+        left, new = text.split("->", 1)
+        segments = [(left, curses.A_NORMAL), ("->", footer_attr()), (new, color_pair(COLOR_WARNING) | curses.A_BOLD)]
+    write_segments(stdscr, row, col, segments, width)
+
+
+def write_segments(stdscr, row: int, col: int, segments: list[tuple[str, int]], width: int) -> None:
+    used = 0
+    for text, attr in segments:
+        if used >= width:
+            return
+        chunk = text[: max(0, width - used)]
+        safe_addstr(stdscr, row, col + used, chunk, attr)
+        used += len(chunk)
 
 
 def safe_move(stdscr, row: int, col: int) -> None:

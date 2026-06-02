@@ -22,7 +22,10 @@ def run_config(config_path: Path) -> int:
     telemetry_rows: list[dict] = []
     errors: list[dict] = []
 
-    for profile in cfg.profiles:
+    profiles = selected_profiles(cfg)
+    if not profiles:
+        errors.append({"profile": "", "model": "", "returncode": 2, "stderr_log": "", "stderr_tail": f"No profiles selected by run_profiles={cfg.run_profiles!r}"})
+    for profile in profiles:
         error = run_profile(profile, out_dir, live_summary, all_rows, telemetry_rows)
         if error:
             errors.append(error)
@@ -36,6 +39,14 @@ def run_config(config_path: Path) -> int:
     }
     write_final_outputs(out_dir, live_summary, all_rows, telemetry_rows, errors, run_meta)
     return 1 if errors else 0
+
+
+def selected_profiles(cfg) -> list:
+    choice = str(getattr(cfg, "run_profiles", "both") or "both").strip().lower()
+    if choice in {"both", "all", ""}:
+        return list(cfg.profiles)
+    names = {part.strip() for part in choice.split(",") if part.strip()}
+    return [profile for profile in cfg.profiles if profile.name in names]
 
 
 def create_result_dir(run_prefix: str) -> Path:

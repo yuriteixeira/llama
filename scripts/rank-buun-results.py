@@ -7,6 +7,8 @@ import argparse
 import csv
 import html
 import math
+import subprocess
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +18,7 @@ from typing import Any
 from bench_buun_tui.models import find_models, model_label
 from bench_buun_tui.paths import RESULT_DIR, ROOT
 
+UPDATE_PRESETS_SCRIPT = ROOT / "scripts" / "update-buun-model-presets.py"
 PAIR_TESTS = {"pp512", "tg128"}
 KEY_FIELDS = [
     "model_path",
@@ -140,6 +143,7 @@ def main() -> int:
     parser.add_argument("--score", choices=["normalized-geomean", "simple-geomean"], default="normalized-geomean")
     parser.add_argument("--include-test-runs", action="store_true", help="include run directories whose name contains 'test'")
     parser.add_argument("--latest-only", action="store_true", help="only rank the latest run directory")
+    parser.add_argument("--no-update-presets", action="store_true", help="do not update versions/buun/model-presets.ini after writing rankings")
     args = parser.parse_args()
 
     input_dir = args.input.resolve()
@@ -186,6 +190,8 @@ def main() -> int:
     print(f"Wrote {output_md}")
     print(f"Wrote {output_html}")
     print(f"Wrote {output_csv}")
+    if not args.no_update_presets:
+        update_model_presets(args)
     return 0
 
 
@@ -770,6 +776,34 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def update_model_presets(args: argparse.Namespace) -> bool:
+    cmd = [
+        sys.executable,
+        str(UPDATE_PRESETS_SCRIPT),
+        "--input",
+        str(args.input),
+        "--min-samples",
+        str(max(1, args.min_samples)),
+        "--score",
+        args.score,
+    ]
+    if args.include_test_runs:
+        cmd.append("--include-test-runs")
+    if args.latest_only:
+        cmd.append("--latest-only")
+    print("Updating buun model presets from best recorded results...", flush=True)
+    proc = subprocess.run(cmd, text=True, capture_output=True, cwd=ROOT)
+    if proc.stdout.strip():
+        print(proc.stdout.rstrip())
+    if proc.stderr.strip():
+        print(proc.stderr.rstrip())
+    if proc.returncode == 0:
+        print(f"Model presets updated: {ROOT / 'versions/buun/model-presets.ini'}")
+        return True
+    print(f"Model preset update failed (exit {proc.returncode}).")
+    return False
 
 
 def render_html(

@@ -27,6 +27,10 @@
     .axis text { fill: #333; font-size: 12px; }
     .grid line { stroke: #eee; }
     .grid path { display: none; }
+    .metric-cell { color: #075985; background: #e0f2fe; font-weight: 700; }
+    .config-cell { color: #166534; background: #dcfce7; font-weight: 600; }
+    .delta-cell { color: #92400e; background: #fef3c7; font-weight: 700; }
+    .error-cell { color: #991b1b; background: #fee2e2; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -77,6 +81,17 @@ function modelDisplay(r) { return r.model_display ?? (r.model?.split('/').pop() 
 function testName(r) { return num(r.n_prompt) > 0 ? `pp${r.n_prompt}` : (num(r.n_gen) > 0 ? `tg${r.n_gen}` : 'unknown'); }
 function seriesKey(r) { return `${r.profile} ${modelDisplay(r)} ${r.cache_strategy} b=${r.n_batch} ub=${r.n_ubatch} t=${r.n_threads} moe=${r.n_cpu_moe} ngl=${r.n_gpu_layers} fa=${r.flash_attn}`; }
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+const metricFields = new Set(['avg_ts','stddev_ts','wall_s','gpu_temp_c','cpu_temp_c','gpu_power_w','gpu_util_pct','cpu_util_pct','gpu_mem_util_pct','ram_used_pct','gpu_mem_used_mib','ram_used_mib']);
+const configFields = new Set(['n_depth','n_prompt','n_gen','n_batch','n_ubatch','n_threads','n_cpu_moe','n_gpu_layers','cache_strategy','type_k','type_v','flash_attn']);
+function cellClass(field, value) {
+  const text = String(value ?? '');
+  if (/error|failed|invalid|timeout/i.test(text)) return 'error-cell';
+  if (/\s->\s/.test(text)) return 'delta-cell';
+  if (metricFields.has(field) || field.startsWith('metric_')) return 'metric-cell';
+  if (configFields.has(field)) return 'config-cell';
+  return '';
+}
+function td(field, value) { return `<td class="${cellClass(field, value)}">${esc(value)}</td>`; }
 function formatDuration(seconds) {
   seconds = Math.max(0, Math.round(num(seconds)));
   const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
@@ -288,10 +303,10 @@ if (errors.length) {
   document.getElementById('errors').innerHTML = errors.map(e => `<h3>${esc(e.profile ?? 'run')} exit=${esc(e.returncode ?? '')}</h3><pre>${esc(e.stderr_tail ?? e.error ?? '')}</pre>`).join('');
 }
 const table = document.getElementById('rows');
-table.innerHTML = '<tr>' + fields.map(f => `<th>${f}</th>`).join('') + '</tr>' + rowsWithTest.map(r => '<tr>' + fields.map(f => `<td>${esc(r[f])}</td>`).join('') + '</tr>').join('');
+table.innerHTML = '<tr>' + fields.map(f => `<th>${f}</th>`).join('') + '</tr>' + rowsWithTest.map(r => '<tr>' + fields.map(f => td(f, r[f])).join('') + '</tr>').join('');
 const telemetryFields = [...new Set(telemetry.flatMap(r => Object.keys(r)))];
 const telemetryTable = document.getElementById('telemetry-rows');
-telemetryTable.innerHTML = telemetryFields.length ? '<tr>' + telemetryFields.map(f => `<th>${esc(f)}</th>`).join('') + '</tr>' + telemetry.map(r => '<tr>' + telemetryFields.map(f => `<td>${esc(r[f])}</td>`).join('') + '</tr>').join('') : '<tr><td>No telemetry samples</td></tr>';
+telemetryTable.innerHTML = telemetryFields.length ? '<tr>' + telemetryFields.map(f => `<th>${esc(f)}</th>`).join('') + '</tr>' + telemetry.map(r => '<tr>' + telemetryFields.map(f => td(f, r[f])).join('') + '</tr>').join('') : '<tr><td>No telemetry samples</td></tr>';
 </script>
 </body>
 </html>

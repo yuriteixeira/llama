@@ -41,6 +41,7 @@ def save_config(cfg: BenchConfig, path: Path) -> None:
         "bench": str(BENCH),
         "output_format": cfg.output_format,
         "run_prefix": cfg.run_prefix,
+        "run_profiles": cfg.run_profiles,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
     for profile in cfg.profiles:
@@ -59,6 +60,8 @@ def load_config(path: Path) -> BenchConfig:
     cfg = BenchConfig()
     if "run" in cp and "run_prefix" in cp["run"]:
         cfg.run_prefix = cp["run"]["run_prefix"]
+    if "run" in cp and "run_profiles" in cp["run"]:
+        cfg.run_profiles = cp["run"].get("run_profiles", "both")
     profiles: list[Profile] = []
     for section in cp.sections():
         if not section.startswith("profile"):

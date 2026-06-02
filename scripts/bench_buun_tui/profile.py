@@ -106,3 +106,4 @@ class BenchConfig:
     profiles: list[Profile] = field(default_factory=lambda: [Profile("profile_a"), Profile("profile_b")])
     output_format: str = "jsonl"
     run_prefix: str = "bench"
+    run_profiles: str = "both"
