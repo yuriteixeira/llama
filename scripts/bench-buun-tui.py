@@ -51,6 +51,16 @@ FIELD_DESCRIPTIONS = {
     "warmup": "llama-bench warmup toggle. false adds --no-warmup for faster exploration; true gives more representative/stable numbers.",
     "device": "llama-bench -dev/--device. CUDA0 targets the RTX GPU explicitly; auto lets llama.cpp choose devices.",
     "flash_attn": "llama-bench -fa/--flash-attn. Equivalent to server preset flash-attn=on/off. 1 enables Flash Attention; unset uses llama-bench default, currently 0.",
+    "temp": "llama-server --temp/--temperature. Sampling temperature; documented/server source default is 0.80. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
+    "top_p": "llama-server --top-p. Nucleus sampling probability mass; documented/server source default is 0.95, 1.0 disables. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
+    "top_k": "llama-server --top-k. Top-k sampling candidate limit; documented/server source default is 40, 0 disables. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
+    "min_p": "llama-server --min-p. Minimum probability sampling threshold; documented/server source default is 0.05, 0.0 disables. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
+    "presence_penalty": "llama-server --presence-penalty. Penalizes tokens already present; documented/server source default is 0.00, disabled. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
+    "repeat_penalty": "llama-server --repeat-penalty. Penalizes repeated token sequences; documented/server source default is 1.00, disabled. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports server sampling flags.",
+    "draft": "llama-server --draft/--draft-n/--draft-max. Compatibility alias for speculative draft token count; documented defaults are 16 for top-level speculative n_max and 3 for --spec-draft-n-max. Current llama-bench --help/source does not expose this flag.",
+    "specd_draft_n_max": "llama-server --spec-draft-n-max. Maximum speculative draft tokens; documented/server source default is 3. Note: server docs spell this --spec-draft-n-max, not --specd-draft-n-max. Current llama-bench --help/source does not expose this flag.",
+    "no_mmap": "llama-server --no-mmap. Disable memory mapping; server and llama-bench source/help default to mmap enabled. In llama-bench this is emitted as --mmap 0 when enabled.",
+    "mlock": "llama-server --mlock. Lock model memory; source default is false/off. Current llama-bench --help/source does not expose this flag, so setting it may fail unless your bench binary supports it.",
 }
 
 
@@ -70,6 +80,16 @@ PRESETS = {
     "warmup": ["false", "true", "unset"],
     "device": ["CUDA0", "auto", "unset"],
     "flash_attn": ["1", "0", "unset"],
+    "temp": ["unset", "0.7", "0.0", "1.0", "custom"],
+    "top_p": ["unset", "0.95", "1.0", "0.9", "custom"],
+    "top_k": ["unset", "20", "40", "0", "custom"],
+    "min_p": ["unset", "0.0", "0.05", "0.1", "custom"],
+    "presence_penalty": ["unset", "0.0", "0.1", "custom"],
+    "repeat_penalty": ["unset", "1.0", "1.05", "1.1", "custom"],
+    "draft": ["unset", "mtp", "custom"],
+    "specd_draft_n_max": ["unset", "2", "1", "4", "custom"],
+    "no_mmap": ["unset", "false", "true"],
+    "mlock": ["unset", "false", "true"],
 }
 
 
@@ -90,6 +110,16 @@ class Profile:
     warmup: str = "false"
     device: str = "CUDA0"
     flash_attn: str = "1"
+    temp: str = "unset"
+    top_p: str = "unset"
+    top_k: str = "unset"
+    min_p: str = "unset"
+    presence_penalty: str = "unset"
+    repeat_penalty: str = "unset"
+    draft: str = "unset"
+    specd_draft_n_max: str = "unset"
+    no_mmap: str = "unset"
+    mlock: str = "unset"
 
     def items(self) -> list[tuple[str, str]]:
         return [
@@ -107,6 +137,16 @@ class Profile:
             ("warmup", self.warmup),
             ("device", self.device),
             ("flash_attn", self.flash_attn),
+            ("temp", self.temp),
+            ("top_p", self.top_p),
+            ("top_k", self.top_k),
+            ("min_p", self.min_p),
+            ("presence_penalty", self.presence_penalty),
+            ("repeat_penalty", self.repeat_penalty),
+            ("draft", self.draft),
+            ("specd_draft_n_max", self.specd_draft_n_max),
+            ("no_mmap", self.no_mmap),
+            ("mlock", self.mlock),
         ]
 
 
@@ -309,6 +349,10 @@ def add_arg(cmd: list[str], flag: str, value: str) -> None:
         cmd.extend([flag, value])
 
 
+def truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def profile_command(profile: Profile, raw_path: Path) -> list[str]:
     ctk, ctv = CACHE_STRATEGIES.get(profile.cache_strategy, CACHE_STRATEGIES["turbo"])
     model_path = Path(profile.model)
@@ -334,6 +378,18 @@ def profile_command(profile: Profile, raw_path: Path) -> list[str]:
         cmd.extend(["--cache-type-v", ctv])
     add_arg(cmd, "--device", profile.device)
     add_arg(cmd, "--flash-attn", profile.flash_attn)
+    add_arg(cmd, "--temp", profile.temp)
+    add_arg(cmd, "--top-p", profile.top_p)
+    add_arg(cmd, "--top-k", profile.top_k)
+    add_arg(cmd, "--min-p", profile.min_p)
+    add_arg(cmd, "--presence-penalty", profile.presence_penalty)
+    add_arg(cmd, "--repeat-penalty", profile.repeat_penalty)
+    add_arg(cmd, "--draft", profile.draft)
+    add_arg(cmd, "--specd-draft-n-max", profile.specd_draft_n_max)
+    if is_set(profile.no_mmap) and truthy(profile.no_mmap):
+        cmd.extend(["--mmap", "0"])
+    if is_set(profile.mlock) and truthy(profile.mlock):
+        cmd.append("--mlock")
     add_arg(cmd, "--repetitions", profile.repetitions)
     if profile.warmup.lower() not in {"1", "true", "yes", "on", "unset", "none", "default"}:
         cmd.append("--no-warmup")
