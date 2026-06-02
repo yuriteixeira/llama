@@ -148,16 +148,24 @@ def format_param_count(value: object) -> str:
     return str(int(count))
 
 
+def model_selector_label(model: str) -> str:
+    if not model:
+        return "No model selected"
+    p = model_path(model)
+    return f"{Path(model).name} ({human_size(p)})"
+
+
 def model_options(models: list[str]) -> tuple[list[str], dict[str, str]]:
     mapping: dict[str, str] = {}
     options: list[str] = []
     for model in models:
-        label = model_label(model)
+        label = model_selector_label(model)
         if label in mapping:
-            label = f"{model} {model_detail_brackets(model)} ({human_size(model_path(model))})"
+            label = f"{model} ({human_size(model_path(model))})"
         mapping[label] = model
         options.append(label)
     return options, mapping
+
 
 
 def gguf_value(value):

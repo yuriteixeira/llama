@@ -13,6 +13,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from bench_buun_tui.models import find_models, model_label
 from bench_buun_tui.paths import RESULT_DIR, ROOT
 
 PAIR_TESTS = {"pp512", "tg128"}
@@ -124,8 +125,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=RESULT_DIR, help="benchmark results directory")
     parser.add_argument("--output", type=Path, default=RESULT_DIR / "ranking.md", help="markdown report path")
-    parser.add_argument("--csv-output", type=Path, default=None, help="csv report path (defaults to sibling ranking.csv)")
-    parser.add_argument("--html-output", type=Path, default=None, help="html report path (defaults to input/index.html)")
+    parser.add_argument("--csv-output", type=Path, default=None, help="csv report path (defaults to sibling ranking.txt)")
+    parser.add_argument("--html-output", type=Path, default=None, help="html report path (defaults to input/ranking.html)")
     parser.add_argument("--min-samples", type=int, default=1, help="minimum paired samples required for overall ranking")
     parser.add_argument("--score", choices=["normalized-geomean", "simple-geomean"], default="normalized-geomean")
     parser.add_argument("--include-test-runs", action="store_true", help="include run directories whose name contains 'test'")
@@ -134,8 +135,8 @@ def main() -> int:
 
     input_dir = args.input.resolve()
     output_md = args.output.resolve()
-    output_csv = (args.csv_output.resolve() if args.csv_output else output_md.with_suffix(".csv"))
-    output_html = (args.html_output.resolve() if args.html_output else input_dir / "index.html")
+    output_csv = (args.csv_output.resolve() if args.csv_output else output_md.with_suffix(".txt"))
+    output_html = (args.html_output.resolve() if args.html_output else input_dir / "ranking.html")
 
     summaries = discover_summary_files(input_dir, include_test_runs=args.include_test_runs, latest_only=args.latest_only)
     rows = load_rows(summaries)
@@ -145,7 +146,7 @@ def main() -> int:
         output_html.parent.mkdir(parents=True, exist_ok=True)
         output_md.write_text("# Buun Benchmark Ranking\n\nNo finalized benchmark rows found.\n")
         write_csv(output_csv, [])
-        output_html.write_text(render_html(output_html, input_dir, [], [], [], [], [], args, output_csv, output_md, message="No finalized benchmark rows found."))
+        output_html.write_text(render_html(output_html, input_dir, [], [], [], [], [], [], args, output_csv, output_md, message="No finalized benchmark rows found."))
         print(f"Wrote {output_html}")
         print(f"No ranking data found under {input_dir}")
         return 0
@@ -157,21 +158,22 @@ def main() -> int:
         output_html.parent.mkdir(parents=True, exist_ok=True)
         output_md.write_text("# Buun Benchmark Ranking\n\nNo paired PP/TG rows were found.\n")
         write_csv(output_csv, [])
-        output_html.write_text(render_html(output_html, input_dir, [], [], [], [], [], args, output_csv, output_md, message="No paired PP/TG rows were found."))
+        output_html.write_text(render_html(output_html, input_dir, [], [], [], [], [], [], args, output_csv, output_md, message="No paired PP/TG rows were found."))
         print(f"Wrote {output_html}")
         print("No paired PP/TG samples found.")
         return 0
 
     depth_best, pp_best, tg_best = rank_by_depth(paired_samples, score_mode=args.score)
     overall = rank_overall(paired_samples, min_samples=max(1, args.min_samples), score_mode=args.score)
+    untested_models = find_untested_models(paired_samples)
     all_candidate_rows = rows_to_csv_rows(paired_samples, args.score)
 
     output_md.parent.mkdir(parents=True, exist_ok=True)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     output_html.parent.mkdir(parents=True, exist_ok=True)
     write_csv(output_csv, all_candidate_rows)
-    output_md.write_text(render_markdown(output_md, input_dir, overall, depth_best, pp_best, tg_best, paired_samples, args))
-    output_html.write_text(render_html(output_html, input_dir, overall, depth_best, pp_best, tg_best, paired_samples, args, output_csv, output_md))
+    output_md.write_text(render_markdown(output_md, input_dir, overall, depth_best, pp_best, tg_best, paired_samples, untested_models, args))
+    output_html.write_text(render_html(output_html, input_dir, overall, depth_best, pp_best, tg_best, paired_samples, untested_models, args, output_csv, output_md))
     print(f"Wrote {output_md}")
     print(f"Wrote {output_html}")
     print(f"Wrote {output_csv}")
@@ -207,6 +209,16 @@ def load_rows(summary_files: list[Path]) -> list[dict[str, Any]]:
     return out
 
 
+def display_model_label(model: str, model_path: str = "") -> str:
+    if model and "[" in model and "]" in model:
+        return model
+    if model_path:
+        return model_label(model_path)
+    if model:
+        return model_label(model)
+    return ""
+
+
 def build_paired_samples(rows: list[dict[str, Any]]) -> list[Sample]:
     grouped: dict[GroupKey, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -239,7 +251,7 @@ def build_paired_samples(rows: list[dict[str, Any]]) -> list[Sample]:
                 run_dir=key.run_dir,
                 profile=key.profile,
                 depth=key.depth,
-                model=str(rep.get("model") or Path(str(rep.get("model_path") or "")).name),
+                model=str(rep.get("model") or model_label(str(rep.get("model_path") or "")) or Path(str(rep.get("model_path") or "")).name),
                 model_path=str(rep.get("model_path") or ""),
                 cache_strategy=str(rep.get("cache_strategy") or ""),
                 n_batch=parse_int(rep.get("n_batch")),
@@ -408,7 +420,7 @@ def rows_to_csv_rows(samples: list[Sample], score_mode: str) -> list[dict[str, A
     return rows
 
 
-def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggregate], depth_best: dict[int, Sample], pp_best: dict[int, Sample], tg_best: dict[int, Sample], paired_samples: list[Sample], args: argparse.Namespace) -> str:
+def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggregate], depth_best: dict[int, Sample], pp_best: dict[int, Sample], tg_best: dict[int, Sample], paired_samples: list[Sample], untested_models: list[str], args: argparse.Namespace) -> str:
     lines: list[str] = ["# Buun Benchmark Ranking", ""]
     lines.append(f"Input: `{input_dir}`  ")
     lines.append(f"Paired samples: {len(paired_samples)}  ")
@@ -420,7 +432,7 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
     if overall:
         winner = overall[0]
         lines.extend([
-            f"Model: `{Path(winner.model_path).name or winner.model}`",
+            f"Model: `{display_model_label(winner.model, winner.model_path)}`",
             f"Config: {format_config_inline(winner)}",
             f"Median PP TPS: `{fmt_num(median(winner.pp_values))}`",
             f"Median TG TPS: `{fmt_num(median(winner.tg_values))}`",
@@ -437,6 +449,16 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
     else:
         lines.append("No overall winner found.\n")
 
+    lines.append("## Top Overall Rankings")
+    lines.append("")
+    lines.append("| Rank | Model | Score | PP TPS | TG TPS | Samples | Config |")
+    lines.append("|---:|---|---:|---:|---:|---:|---|")
+    for rank, agg in enumerate(overall[:5], start=1):
+        lines.append(
+            f"| {rank} | `{display_model_label(agg.model, agg.model_path)}` | {fmt_num(median(agg.scores))} | {fmt_num(median(agg.pp_values))} | {fmt_num(median(agg.tg_values))} | `{agg.sample_count}` | {format_config_inline(agg)} |"
+        )
+    lines.append("")
+
     lines.append("## Winners by Context Depth")
     lines.append("")
     lines.append("| Depth | Rank | Model | PP TPS | TG TPS | Score | Run | Profile |")
@@ -444,7 +466,7 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
     for depth in sorted(depth_best):
         sample = depth_best[depth]
         lines.append(
-            f"| {depth} | 1 | `{Path(sample.model_path).name or sample.model}` | {fmt_num(sample.pp_tps)} | {fmt_num(sample.tg_tps)} | {fmt_num(sample.score)} | `{sample.run_dir}` | `{sample.profile}` |"
+            f"| {depth} | 1 | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.pp_tps)} | {fmt_num(sample.tg_tps)} | {fmt_num(sample.score)} | `{sample.run_dir}` | `{sample.profile}` |"
         )
     lines.append("")
 
@@ -454,7 +476,7 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
     lines.append("|---:|---|---:|---|---|")
     for depth in sorted(pp_best):
         sample = pp_best[depth]
-        lines.append(f"| {depth} | `{Path(sample.model_path).name or sample.model}` | {fmt_num(sample.pp_tps)} | `{sample.run_dir}` | `{sample.profile}` |")
+        lines.append(f"| {depth} | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.pp_tps)} | `{sample.run_dir}` | `{sample.profile}` |")
     lines.append("")
 
     lines.append("## Best TG-only by Depth")
@@ -463,10 +485,28 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
     lines.append("|---:|---|---:|---|---|")
     for depth in sorted(tg_best):
         sample = tg_best[depth]
-        lines.append(f"| {depth} | `{Path(sample.model_path).name or sample.model}` | {fmt_num(sample.tg_tps)} | `{sample.run_dir}` | `{sample.profile}` |")
+        lines.append(f"| {depth} | `{display_model_label(sample.model, sample.model_path)}` | {fmt_num(sample.tg_tps)} | `{sample.run_dir}` | `{sample.profile}` |")
+    lines.append("")
+
+    lines.append("## Untested Models")
+    lines.append("")
+    if untested_models:
+        lines.append(f"Untested models under `models/`: `{len(untested_models)}`")
+        lines.append("")
+        lines.append("| Model |")
+        lines.append("|---|")
+        for model in untested_models:
+            lines.append(f"| `{model_label(model)}` |")
+    else:
+        lines.append("All models under `models/` have been tested.")
     lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def find_untested_models(samples: list[Sample]) -> list[str]:
+    tested = {str(sample.model_path).strip() for sample in samples if str(sample.model_path).strip()}
+    return [model for model in find_models() if model not in tested]
 
 
 def max_depth_for_config(samples: list[Sample], config_key: str) -> int:
@@ -627,6 +667,7 @@ def render_html(
     pp_best: dict[int, Sample],
     tg_best: dict[int, Sample],
     paired_samples: list[Sample],
+    untested_models: list[str],
     args: argparse.Namespace,
     csv_path: Path,
     md_path: Path,
@@ -655,20 +696,28 @@ def render_html(
         )
 
     def model_cell(sample: Sample) -> RawHTML:
-        label = Path(sample.model_path).name or sample.model
+        label = display_model_label(sample.model, sample.model_path)
         command = llama_server_command_for_sample(sample)
         return RawHTML(
             f"<span>{esc(label)}</span> "
             f"<button type='button' class='copy-cmd' data-cmd='{esc(command)}' onclick='copyCmd(this)'>copy llama-server cmd</button>"
         )
 
-    links = f"<a href='{esc(csv_path.name)}'>ranking.csv</a> · <a href='{esc(md_path.name)}'>ranking.md</a>"
+    def aggregate_model_cell(agg: ConfigAggregate) -> RawHTML:
+        label = display_model_label(agg.model, agg.model_path)
+        command = llama_server_command(agg, max_depth_for_config(paired_samples, agg.config_key))
+        return RawHTML(
+            f"<span>{esc(label)}</span> "
+            f"<button type='button' class='copy-cmd' data-cmd='{esc(command)}' onclick='copyCmd(this)'>copy llama-server cmd</button>"
+        )
+
+    links = f"<a href='{esc(csv_path.name)}'>ranking.txt</a> · <a href='{esc(md_path.name)}'>ranking.md</a>"
     overall_block = ""
     if overall:
         winner = overall[0]
         command = llama_server_command(winner, max_depth_for_config(paired_samples, winner.config_key))
         overall_block = (
-            f"<p><b>Model:</b> <code>{esc(Path(winner.model_path).name or winner.model)}</code> "
+            f"<p><b>Model:</b> <code>{esc(display_model_label(winner.model, winner.model_path))}</code> "
             f"<button type='button' class='copy-cmd' data-cmd='{esc(command)}' onclick='copyCmd(this)'>copy llama-server cmd</button></p>"
             f"<p><b>Config:</b> <code>{esc(format_config_inline(winner))}</code></p>"
             f"<p><b>Median PP TPS:</b> <code>{esc(fmt_num(median(winner.pp_values)))}</code> "
@@ -680,9 +729,11 @@ def render_html(
     else:
         overall_block = "<p>No overall winner found.</p>"
 
+    overall_rows = [[rank, aggregate_model_cell(agg), fmt_num(median(agg.scores)), fmt_num(median(agg.pp_values)), fmt_num(median(agg.tg_values)), agg.sample_count, format_config_inline(agg)] for rank, agg in enumerate(overall[:5], start=1)]
     depth_rows = [[depth, 1, model_cell(sample), fmt_num(sample.pp_tps), fmt_num(sample.tg_tps), fmt_num(sample.score), sample.run_dir, sample.profile] for depth, sample in sorted(depth_best.items())]
     pp_rows = [[depth, model_cell(sample), fmt_num(sample.pp_tps), sample.run_dir, sample.profile] for depth, sample in sorted(pp_best.items())]
     tg_rows = [[depth, model_cell(sample), fmt_num(sample.tg_tps), sample.run_dir, sample.profile] for depth, sample in sorted(tg_best.items())]
+    untested_rows = [[model] for model in untested_models]
 
     body = [
         "<!doctype html>",
@@ -710,12 +761,17 @@ def render_html(
     body.extend([
         "<h2>Overall Winner</h2>",
         overall_block,
+        "<h2>Top Overall Rankings</h2>",
+        table(["Rank", "Model", "Score", "PP TPS", "TG TPS", "Samples", "Config"], overall_rows),
         "<h2>Winners by Context Depth</h2>",
         table(["Depth", "Rank", "Model", "PP TPS", "TG TPS", "Score", "Run", "Profile"], depth_rows),
         "<h2>Best PP-only by Depth</h2>",
         table(["Depth", "Model", "PP TPS", "Run", "Profile"], pp_rows),
         "<h2>Best TG-only by Depth</h2>",
         table(["Depth", "Model", "TG TPS", "Run", "Profile"], tg_rows),
+        "<h2>Untested Models</h2>",
+        (f"<p>Untested models under <code>models/</code>: <code>{len(untested_models)}</code></p>" if untested_models else "<p>All models under <code>models/</code> have been tested.</p>"),
+        table(["Model"], untested_rows),
         "</body></html>",
     ])
     return "\n".join(body)

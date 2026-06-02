@@ -110,6 +110,8 @@ def update_ranking_reports() -> bool:
         str(RESULT_DIR),
         "--output",
         str(RESULT_DIR / "ranking.md"),
+        "--html-output",
+        str(RESULT_DIR / "ranking.html"),
     ]
     print("Running ranking update...", flush=True)
     proc = subprocess.run(cmd, text=True, capture_output=True)
@@ -119,7 +121,7 @@ def update_ranking_reports() -> bool:
         print(proc.stderr.rstrip())
     if proc.returncode == 0:
         print(f"Ranking updated: {RESULT_DIR / 'ranking.md'}")
-        print(f"Browser report: {RESULT_DIR / 'index.html'}")
+        print(f"Browser report: {RESULT_DIR / 'ranking.html'}")
         return True
     print(f"Ranking update failed (exit {proc.returncode}).")
     return False

@@ -907,7 +907,7 @@ def choose_field_value(stdscr, profile: Profile, field: str, cur: str, descripti
 
 def choose_model(stdscr, current: str, description: str, models: list[str]) -> str:
     opts, mapping = model_options(models)
-    current_label = model_label(current) if current else opts[0]
+    current_label = next((label for label, model in mapping.items() if model == current), opts[0] if opts else "")
     picked = choose_from(stdscr, "Choose model", opts, current_label, description)
     return mapping.get(picked, current)
 

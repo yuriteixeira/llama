@@ -32,13 +32,16 @@ def report_rows(rows: list[dict]) -> list[dict]:
 
 def _with_model_offload_info(row: dict) -> dict:
     out = dict(row)
-    model = out.get("model") or out.get("model_filename") or ""
-    if model:
-        out["model_path"] = str(model)
-        out["model_display"] = model_label(str(model))
+    model_path = str(out.get("model_path") or "").strip()
+    model = str(out.get("model") or out.get("model_filename") or model_path or "").strip()
+    if model_path:
+        out["model_path"] = model_path
+    if model_path or model:
+        label_source = model_path or model
+        out["model_display"] = model_label(label_source)
         out["model"] = out["model_display"]
     try:
-        meta = model_metadata(str(model))
+        meta = model_metadata(str(model_path or model))
         if meta.get("block_count"):
             layers = int(meta["block_count"])
             out["model_layers"] = layers

@@ -224,7 +224,7 @@ profile
 Generate reports under:
 
 ```txt
-bench-results/buun-tui/ranking.csv
+bench-results/buun-tui/ranking.txt
 bench-results/buun-tui/ranking.md
 ```
 
