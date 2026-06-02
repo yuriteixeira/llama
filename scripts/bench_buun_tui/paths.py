@@ -9,3 +9,4 @@ RESULT_DIR = ROOT / "bench-results/buun-tui"
 GGUF_PY = ROOT / "versions/buun/src/buun-llama-cpp/gguf-py"
 PACKAGE_DIR = Path(__file__).resolve().parent
 HTML_REPORT_TEMPLATE = PACKAGE_DIR / "index.html"
+D3_SCRIPT = PACKAGE_DIR / "d3.v7.min.js"

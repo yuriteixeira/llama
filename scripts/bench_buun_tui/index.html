@@ -21,6 +21,10 @@
     .chart h2 { margin-bottom: 8px; }
     .legend { font-size: 12px; columns: 1; }
     .legend span { display: inline-block; width: 0.9em; height: 0.9em; margin-right: 0.35em; vertical-align: middle; }
+    .axis path, .axis line { stroke: #333; }
+    .axis text { fill: #333; font-size: 12px; }
+    .grid line { stroke: #eee; }
+    .grid path { display: none; }
   </style>
 </head>
 <body>
@@ -50,6 +54,7 @@
     <h2>Telemetry samples</h2>
     <table id="telemetry-rows"></table>
   </section>
+<script src="assets/d3.v7.min.js"></script>
 <script>
 const rows = __ROWS_JSON__;
 const errors = __ERRORS_JSON__;
@@ -60,114 +65,148 @@ document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click
   btn.classList.add('active');
   document.getElementById(btn.dataset.tab).classList.add('active');
 }));
-const colors = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+
+const colors = d3.schemeTableau10;
 const fields = ['profile','model','model_layers','cpu_moe_layers','remaining_moe_layers','cache_strategy','test','n_depth','n_prompt','n_gen','n_batch','n_ubatch','n_threads','n_cpu_moe','n_gpu_layers','flash_attn','type_k','type_v','avg_ts','stddev_ts'];
 function num(x) { return Number(x || 0); }
 function testName(r) { return num(r.n_prompt) > 0 ? `pp${r.n_prompt}` : (num(r.n_gen) > 0 ? `tg${r.n_gen}` : 'unknown'); }
 function seriesKey(r) { return `${r.profile} ${r.model?.split('/').pop() ?? ''} ${r.cache_strategy} b=${r.n_batch} ub=${r.n_ubatch} t=${r.n_threads} moe=${r.n_cpu_moe} ngl=${r.n_gpu_layers} fa=${r.flash_attn}`; }
 function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-function svgEl(svg, name, attrs) { const e = document.createElementNS('http://www.w3.org/2000/svg', name); for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v); svg.appendChild(e); return e; }
-function drawChart(title, chartRows) {
-  if (!chartRows.length) return;
-  const wrap = document.createElement('div'); wrap.className = 'chart';
+function chartWrap(title, targetId) {
+  const wrap = document.createElement('div');
+  wrap.className = 'chart';
   wrap.innerHTML = `<h2>${esc(title)}</h2>`;
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  const W = 900, H = 460, L = 75, R = 25, T = 30, B = 65;
-  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); wrap.appendChild(svg);
-  const xs = chartRows.map(r => num(r.n_depth));
-  const ys = chartRows.map(r => num(r.avg_ts));
-  const xmin = Math.min(...xs, 0), xmax = Math.max(...xs, 1);
-  const ymin = 0, ymax = Math.max(...ys, 1) * 1.12;
-  const sx = x => L + (num(x)-xmin) / (xmax-xmin || 1) * (W-L-R);
-  const sy = y => H-B - (num(y)-ymin) / (ymax-ymin || 1) * (H-T-B);
-  svgEl(svg, 'line', {x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:'#333'});
-  svgEl(svg, 'line', {x1:L,y1:T,x2:L,y2:H-B,stroke:'#333'});
-  for (let i=0;i<=5;i++) {
-    const y = ymin + (ymax-ymin)*i/5, py = sy(y);
-    svgEl(svg, 'line', {x1:L,x2:W-R,y1:py,y2:py,stroke:'#eee'});
-    svgEl(svg, 'text', {x:8,y:py+4,fill:'#333'}).textContent = y.toFixed(1);
-  }
-  const xTicks = [...new Set(xs)].sort((a,b)=>a-b);
-  for (const x of xTicks) {
-    const px = sx(x);
-    svgEl(svg, 'line', {x1:px,x2:px,y1:H-B,y2:H-B+5,stroke:'#333'});
-    const t = svgEl(svg, 'text', {x:px,y:H-B+22,fill:'#333','text-anchor':'middle'}); t.textContent = x;
-  }
-  const groups = new Map();
-  for (const r of chartRows) { const k = seriesKey(r); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
-  const legend = document.createElement('div'); legend.className = 'legend';
-  let ci = 0;
-  for (const [k, rs] of groups) {
-    const color = colors[ci++ % colors.length];
-    rs.sort((a,b)=>num(a.n_depth)-num(b.n_depth));
-    const pts = rs.map(r => `${sx(r.n_depth)},${sy(r.avg_ts)}`).join(' ');
-    svgEl(svg, 'polyline', {points:pts, fill:'none', stroke:color, 'stroke-width':2});
-    for (const r of rs) {
-      svgEl(svg, 'circle', {cx:sx(r.n_depth), cy:sy(r.avg_ts), r:4, fill:color});
-      svgEl(svg, 'title', {}).textContent = `${k} depth=${r.n_depth} avg_ts=${r.avg_ts}`;
-    }
-    const item = document.createElement('div'); item.innerHTML = `<span style="background:${color}"></span>${esc(k)}`; legend.appendChild(item);
-  }
-  svgEl(svg, 'text', {x:(W-R+L)/2, y:H-15, fill:'#333','text-anchor':'middle'}).textContent = 'n_depth';
-  svgEl(svg, 'text', {x:8, y:18, fill:'#333'}).textContent = 'tokens/s';
-  wrap.appendChild(legend);
-  document.getElementById('charts').appendChild(wrap);
+  document.getElementById(targetId).appendChild(wrap);
+  return wrap;
 }
-const rowsWithTest = rows.map(r => Object.assign({}, r, {test: r.test ?? testName(r)}));
-for (const t of [...new Set(rowsWithTest.map(r => r.test))].sort()) drawChart(t, rowsWithTest.filter(r => r.test === t));
-
-function drawTelemetryChart(field, title, unit='') {
-  const samples = telemetry.filter(s => Number.isFinite(num(s[field])));
-  if (!samples.length) return;
-  const wrap = document.createElement('div'); wrap.className = 'chart';
-  wrap.innerHTML = `<h2>${esc(title)}</h2>`;
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  const W = 900, H = 360, L = 75, R = 25, T = 30, B = 65;
-  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); wrap.appendChild(svg);
-  const groups = new Map();
-  samples.forEach(s => { const k = s.profile ?? 'run'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); });
-  for (const items of groups.values()) items.sort((a, b) => num(a.sample_ts) - num(b.sample_ts));
-  const seriesStart = new Map([...groups].map(([k, items]) => [k, Math.min(...items.map(s => num(s.sample_ts)))]));
-  const relSeconds = (k, s) => num(s.sample_ts) - seriesStart.get(k);
-  const xs = [...groups].flatMap(([k, items]) => items.map(s => relSeconds(k, s)));
-  const ys = samples.map(s => num(s[field]));
-  const xmin = Math.min(...xs, 0), xmax = Math.max(...xs, 1);
-  const ymin = Math.min(...ys, 0), ymax = Math.max(...ys, 1) * 1.12;
-  const sx = x => L + (num(x)-xmin) / (xmax-xmin || 1) * (W-L-R);
-  const sy = y => H-B - (num(y)-ymin) / (ymax-ymin || 1) * (H-T-B);
-  svgEl(svg, 'line', {x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:'#333'});
-  svgEl(svg, 'line', {x1:L,y1:T,x2:L,y2:H-B,stroke:'#333'});
-  for (let i=0;i<=5;i++) {
-    const y = ymin + (ymax-ymin)*i/5, py = sy(y);
-    svgEl(svg, 'line', {x1:L,x2:W-R,y1:py,y2:py,stroke:'#eee'});
-    svgEl(svg, 'text', {x:8,y:py+4,fill:'#333'}).textContent = y.toFixed(1);
+function appendLegend(wrap, groups, color) {
+  const legend = document.createElement('div');
+  legend.className = 'legend';
+  for (const key of groups.keys()) {
+    const item = document.createElement('div');
+    item.innerHTML = `<span style="background:${color(key)}"></span>${esc(key)}`;
+    legend.appendChild(item);
   }
-  const legend = document.createElement('div'); legend.className = 'legend';
-  let ci = 0;
-  for (const [k, items] of groups) {
-    const color = colors[ci++ % colors.length];
-    const pts = items.map(s => `${sx(relSeconds(k, s))},${sy(s[field])}`).join(' ');
-    svgEl(svg, 'polyline', {points:pts, fill:'none', stroke:color, 'stroke-width':2});
-    for (const s of items) {
-      svgEl(svg, 'circle', {cx:sx(relSeconds(k, s)), cy:sy(s[field]), r:3, fill:color});
-      svgEl(svg, 'title', {}).textContent = `${k} ${field}=${s[field]} ${unit} t=${relSeconds(k, s).toFixed(1)}s depth=${s.n_depth ?? ''}`;
-    }
-    const item = document.createElement('div'); item.innerHTML = `<span style="background:${color}"></span>${esc(k)}`; legend.appendChild(item);
-  }
-  svgEl(svg, 'text', {x:(W-R+L)/2, y:H-15, fill:'#333','text-anchor':'middle'}).textContent = 'seconds since first sample in each series';
-  svgEl(svg, 'text', {x:8, y:18, fill:'#333'}).textContent = unit || field;
   wrap.appendChild(legend);
-  document.getElementById('telemetry-charts').appendChild(wrap);
+}
+function makeSvg(wrap, width, height) {
+  return d3.select(wrap).append('svg').attr('width', width).attr('height', height).attr('viewBox', `0 0 ${width} ${height}`);
+}
+function addAxes(svg, x, y, width, height, margin, xLabel, yLabel) {
+  svg.append('g')
+    .attr('class', 'grid')
+    .attr('transform', `translate(${margin.left},0)`)
+    .call(d3.axisLeft(y).ticks(5).tickSize(-(width - margin.left - margin.right)).tickFormat(''));
+  svg.append('g')
+    .attr('class', 'axis')
+    .attr('transform', `translate(0,${height - margin.bottom})`)
+    .call(d3.axisBottom(x).ticks(6));
+  svg.append('g')
+    .attr('class', 'axis')
+    .attr('transform', `translate(${margin.left},0)`)
+    .call(d3.axisLeft(y).ticks(5));
+  svg.append('text')
+    .attr('x', (width + margin.left - margin.right) / 2)
+    .attr('y', height - 15)
+    .attr('fill', '#333')
+    .attr('text-anchor', 'middle')
+    .text(xLabel);
+  svg.append('text')
+    .attr('x', 8)
+    .attr('y', 18)
+    .attr('fill', '#333')
+    .text(yLabel);
+}
+function drawLineChart({targetId, title, data, groupKey, xValue, yValue, xLabel, yLabel, tooltip, width=900, height=460, margin={top:30,right:25,bottom:65,left:75}, yFromZero=true}) {
+  if (!data.length) return;
+  const wrap = chartWrap(title, targetId);
+  const svg = makeSvg(wrap, width, height);
+  const groups = d3.group(data, groupKey);
+  for (const items of groups.values()) items.sort((a, b) => d3.ascending(xValue(a), xValue(b)));
+  const xs = data.map(xValue).filter(Number.isFinite);
+  const ys = data.map(yValue).filter(Number.isFinite);
+  const xExtent = d3.extent(xs);
+  const yExtent = d3.extent(ys);
+  const x = d3.scaleLinear()
+    .domain([Math.min(0, xExtent[0] ?? 0), Math.max(1, xExtent[1] ?? 1)])
+    .nice()
+    .range([margin.left, width - margin.right]);
+  const yMin = yFromZero ? Math.min(0, yExtent[0] ?? 0) : (yExtent[0] ?? 0);
+  const y = d3.scaleLinear()
+    .domain([yMin, Math.max(1, yExtent[1] ?? 1) * 1.12])
+    .nice()
+    .range([height - margin.bottom, margin.top]);
+  addAxes(svg, x, y, width, height, margin, xLabel, yLabel);
+  const color = d3.scaleOrdinal([...groups.keys()], colors);
+  const line = d3.line().defined(d => Number.isFinite(xValue(d)) && Number.isFinite(yValue(d))).x(d => x(xValue(d))).y(d => y(yValue(d)));
+  for (const [key, items] of groups) {
+    svg.append('path')
+      .datum(items)
+      .attr('fill', 'none')
+      .attr('stroke', color(key))
+      .attr('stroke-width', 2)
+      .attr('d', line);
+    svg.append('g')
+      .selectAll('circle')
+      .data(items.filter(d => Number.isFinite(xValue(d)) && Number.isFinite(yValue(d))))
+      .join('circle')
+      .attr('cx', d => x(xValue(d)))
+      .attr('cy', d => y(yValue(d)))
+      .attr('r', 3.5)
+      .attr('fill', color(key))
+      .append('title')
+      .text(d => tooltip(key, d));
+  }
+  appendLegend(wrap, groups, color);
+}
+
+const rowsWithTest = rows.map(r => Object.assign({}, r, {test: r.test ?? testName(r)}));
+for (const t of [...new Set(rowsWithTest.map(r => r.test))].sort()) {
+  drawLineChart({
+    targetId: 'charts',
+    title: t,
+    data: rowsWithTest.filter(r => r.test === t),
+    groupKey: seriesKey,
+    xValue: r => num(r.n_depth),
+    yValue: r => num(r.avg_ts),
+    xLabel: 'n_depth',
+    yLabel: 'tokens/s',
+    tooltip: (k, r) => `${k}\ndepth=${r.n_depth}\navg_ts=${r.avg_ts}`,
+  });
+}
+
+function drawTelemetryChart(specs, title, unit='') {
+  specs = Array.isArray(specs) ? specs : [{field: specs, label: specs}];
+  specs = specs.map(spec => typeof spec === 'string' ? {field: spec, label: spec} : spec);
+  const samples = telemetry.flatMap(s => specs.map(spec => ({...s, _field: spec.field, _label: spec.label ?? spec.field, _value: num(s[spec.field])})))
+    .filter(s => Number.isFinite(s._value) && Number.isFinite(num(s.sample_ts)));
+  if (!samples.length) return;
+  const grouped = d3.group(samples, s => `${s.profile ?? 'run'} ${s._label}`);
+  const starts = new Map([...grouped].map(([k, items]) => [k, d3.min(items, s => num(s.sample_ts))]));
+  const withRelativeTime = samples.map(s => ({...s, _series: `${s.profile ?? 'run'} ${s._label}`, _rel_ts: num(s.sample_ts) - starts.get(`${s.profile ?? 'run'} ${s._label}`)}));
+  drawLineChart({
+    targetId: 'telemetry-charts',
+    title,
+    data: withRelativeTime,
+    groupKey: s => s._series,
+    xValue: s => num(s._rel_ts),
+    yValue: s => num(s._value),
+    xLabel: 'seconds since first sample in each series',
+    yLabel: unit || title,
+    height: 360,
+    yFromZero: false,
+    tooltip: (k, s) => `${k}\n${s._field}=${s._value.toFixed(2)} ${unit}\nt=${num(s._rel_ts).toFixed(1)}s\ndepth=${s.n_depth ?? ''}`,
+  });
 }
 function drawTelemetryCharts() {
   const gpuFields = [
-    ['gpu_temp_c', 'GPU temperature', '°C'],
-    ['gpu_power_w', 'GPU power draw', 'W'],
-    ['gpu_util_pct', 'GPU utilization', '%'],
-    ['gpu_mem_util_pct', 'GPU memory utilization', '%'],
-    ['gpu_mem_used_mib', 'GPU memory used', 'MiB'],
+    [[{field:'gpu_temp_c', label:'GPU'}, {field:'cpu_temp_c', label:'CPU'}], 'GPU/CPU temperature', '°C'],
+    [[{field:'gpu_power_w', label:'GPU'}], 'GPU power draw', 'W'],
+    [[{field:'gpu_util_pct', label:'GPU'}, {field:'cpu_util_pct', label:'CPU'}], 'GPU/CPU utilization', '%'],
+    [[{field:'gpu_mem_util_pct', label:'GPU VRAM'}, {field:'ram_used_pct', label:'RAM'}], 'GPU/RAM memory utilization', '%'],
+    [[{field:'gpu_mem_used_mib', label:'GPU VRAM'}, {field:'ram_used_mib', label:'RAM'}], 'GPU/RAM memory used', 'MiB'],
   ];
-  gpuFields.forEach(([field, title, unit]) => drawTelemetryChart(field, title, unit));
+  gpuFields.forEach(([specs, title, unit]) => drawTelemetryChart(specs, title, unit));
   const merged = Object.assign({}, ...telemetry);
   Object.keys(merged).filter(k => k.startsWith('metric_')).sort().slice(0, 12).forEach(field => drawTelemetryChart(field, field.replace(/^metric_/, 'llama '), ''));
   if (!document.getElementById('telemetry-charts').children.length) {
@@ -179,31 +218,27 @@ function drawOffloadChart() {
   const configs = [];
   for (const r of rowsWithTest) {
     const k = seriesKey(r);
-    if (!seen.has(k) && num(r.model_layers) > 0) { seen.add(k); configs.push(r); }
+    if (!seen.has(k) && num(r.model_layers) > 0) { seen.add(k); configs.push({...r, _key: k}); }
   }
   if (!configs.length) return;
-  const wrap = document.createElement('div'); wrap.className = 'chart';
-  wrap.innerHTML = '<h2>MoE expert placement by layer count</h2><p>CPU MoE layers come from <code>--n-cpu-moe</code>; remaining MoE layers are not forced to CPU. <code>n_gpu_layers</code> is shown in labels as the llama.cpp GPU layer setting.</p>';
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  const W = 900, rowH = 34, L = 260, R = 35, T = 25, B = 30, H = T + B + configs.length * rowH;
-  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); wrap.appendChild(svg);
-  const maxLayers = Math.max(...configs.map(r => num(r.model_layers)), 1);
-  const sx = x => L + num(x) / maxLayers * (W-L-R);
-  svgEl(svg, 'text', {x:L,y:16,fill:'#333'}).textContent = 'CPU MoE';
-  svgEl(svg, 'text', {x:L+95,y:16,fill:'#333'}).textContent = 'remaining MoE';
-  svgEl(svg, 'rect', {x:L+70,y:6,width:14,height:10,fill:'#d62728'});
-  svgEl(svg, 'rect', {x:L+180,y:6,width:14,height:10,fill:'#1f77b4'});
-  configs.forEach((r, i) => {
-    const y = T + i * rowH + 8;
-    const layers = num(r.model_layers), cpu = Math.min(layers, num(r.cpu_moe_layers)), rem = Math.max(0, layers - cpu);
-    svgEl(svg, 'text', {x:4,y:y+13,fill:'#333'}).textContent = `${r.profile} ${(r.model ?? '').split('/').pop()} ngl=${r.n_gpu_layers} ncmoe=${r.n_cpu_moe}`;
-    svgEl(svg, 'rect', {x:L,y:y,width:sx(cpu)-L,height:18,fill:'#d62728'});
-    svgEl(svg, 'rect', {x:sx(cpu),y:y,width:sx(cpu+rem)-sx(cpu),height:18,fill:'#1f77b4'});
-    svgEl(svg, 'rect', {x:L,y:y,width:sx(layers)-L,height:18,fill:'none',stroke:'#333'});
-    svgEl(svg, 'text', {x:sx(layers)+5,y:y+13,fill:'#333'}).textContent = `${cpu} CPU / ${rem} remaining / ${layers} total`;
-  });
-  document.getElementById('offload').appendChild(wrap);
+  const wrap = chartWrap('MoE expert placement by layer count', 'offload');
+  wrap.insertAdjacentHTML('beforeend', '<p>CPU MoE layers come from <code>--n-cpu-moe</code>; remaining MoE layers are not forced to CPU. <code>n_gpu_layers</code> is shown in labels as the llama.cpp GPU layer setting.</p>');
+  const width = 900, rowH = 34, margin = {top:25,right:35,bottom:30,left:260}, height = margin.top + margin.bottom + configs.length * rowH;
+  const svg = makeSvg(wrap, width, height);
+  const maxLayers = d3.max(configs, r => num(r.model_layers)) || 1;
+  const x = d3.scaleLinear().domain([0, maxLayers]).range([margin.left, width - margin.right]);
+  svg.append('rect').attr('x', margin.left + 70).attr('y', 6).attr('width', 14).attr('height', 10).attr('fill', '#d62728');
+  svg.append('text').attr('x', margin.left).attr('y', 16).attr('fill', '#333').text('CPU MoE');
+  svg.append('rect').attr('x', margin.left + 180).attr('y', 6).attr('width', 14).attr('height', 10).attr('fill', '#1f77b4');
+  svg.append('text').attr('x', margin.left + 95).attr('y', 16).attr('fill', '#333').text('remaining MoE');
+  const g = svg.selectAll('g.offload-row').data(configs).join('g').attr('class', 'offload-row').attr('transform', (d, i) => `translate(0,${margin.top + i * rowH + 8})`);
+  g.append('text').attr('x', 4).attr('y', 13).attr('fill', '#333').text(r => `${r.profile} ${(r.model ?? '').split('/').pop()} ngl=${r.n_gpu_layers} ncmoe=${r.n_cpu_moe}`);
+  g.append('rect').attr('x', margin.left).attr('y', 0).attr('width', r => x(Math.min(num(r.model_layers), num(r.cpu_moe_layers))) - margin.left).attr('height', 18).attr('fill', '#d62728');
+  g.append('rect').attr('x', r => x(Math.min(num(r.model_layers), num(r.cpu_moe_layers)))).attr('y', 0).attr('width', r => x(num(r.model_layers)) - x(Math.min(num(r.model_layers), num(r.cpu_moe_layers)))).attr('height', 18).attr('fill', '#1f77b4');
+  g.append('rect').attr('x', margin.left).attr('y', 0).attr('width', r => x(num(r.model_layers)) - margin.left).attr('height', 18).attr('fill', 'none').attr('stroke', '#333');
+  g.append('text').attr('x', r => x(num(r.model_layers)) + 5).attr('y', 13).attr('fill', '#333').text(r => `${r.cpu_moe_layers} CPU / ${r.remaining_moe_layers} remaining / ${r.model_layers} total`);
 }
+
 drawOffloadChart();
 drawTelemetryCharts();
 if (errors.length) {

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .models import model_metadata
-from .paths import HTML_REPORT_TEMPLATE
+from .paths import D3_SCRIPT, HTML_REPORT_TEMPLATE
 
 
 def parse_rows(text: str) -> list[dict]:
@@ -50,6 +50,13 @@ def _with_model_offload_info(row: dict) -> dict:
 def write_html_report(rows: list[dict], path: Path, errors: list[dict] | None = None, telemetry: list[dict] | None = None) -> None:
     html = render_html_report(rows, errors or [], telemetry or [])
     path.write_text(html)
+    copy_report_assets(path.parent)
+
+
+def copy_report_assets(report_dir: Path) -> None:
+    assets = report_dir / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    (assets / D3_SCRIPT.name).write_bytes(D3_SCRIPT.read_bytes())
 
 
 def render_html_report(rows: list[dict], errors: list[dict], telemetry: list[dict] | None = None) -> str:
