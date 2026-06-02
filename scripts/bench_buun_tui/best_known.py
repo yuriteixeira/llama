@@ -312,8 +312,9 @@ Return ONLY an INI document. Do not include prose outside the INI. Use one secti
 
 Allowed auto-applied profile fields: {profile_fields}
 Allowed cache_strategy values: {caches}
-Do not include depths or repetitions as recommended parameters; depths is only for benchmark sweeps and repetitions set by this TUI.
+Do not include depths or repetitions as recommended parameters; depths is only for benchmark sweeps and repetitions is fixed to 1 by this TUI.
 Recommend one best-known value per field, not a list of possible values. Use a single integer for numeric fields. Use unset when a parameter should not be passed.
+Prioritize loadability on this exact hardware over peak throughput. If a model file is close to or larger than physical RAM, or a recommendation is extrapolated from another quant/model, lower confidence and use conservative batch/ubatch/gpu_layers values; do not mark extrapolated values high confidence.
 Include research_summary, confidence, references, architecture, quantization, is_mtp, is_reap, supports_moe, active_params when knowable.
 
 Models:
