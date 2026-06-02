@@ -281,6 +281,14 @@ Median TG TPS: 54.7
 Score: 0.94
 Samples: 5
 
+## How to run the same params on llama-server?
+
+Run this:
+
+```sh
+<add the equivalent llama-server command with the equivalent params and values here>
+```
+
 ## Winners by Depth
 
 | Depth | Rank | Model | PP TPS | TG TPS | Score | Run |
@@ -298,3 +306,4 @@ score = sqrt(normalized_pp * normalized_tg)
 ```
 
 This rewards configurations that are strong at both PP and TG instead of allowing very high PP TPS to hide weak TG TPS.
+

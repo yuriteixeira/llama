@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import curses
 import logging
+import subprocess
+import sys
 from pathlib import Path
 
 from bench_buun_tui.config_store import default_config_path, load_config, remember_config
@@ -13,6 +15,8 @@ from bench_buun_tui.report_server import start_report_server
 from bench_buun_tui.paths import RESULT_DIR
 from bench_buun_tui.runner import run_config
 from bench_buun_tui.tui import tui_main
+
+RANK_SCRIPT = Path(__file__).with_name("rank-buun-results.py")
 
 
 def main() -> int:
@@ -79,6 +83,8 @@ def run_tui_loop(cfg) -> int:
             last_rc = run_config(path)
             logging.info("run finished config=%s rc=%s", path, last_rc)
             cfg = load_config(path)
+            if prompt_update_ranking(server.url):
+                update_ranking_reports()
             if not wait_for_enter(server.url):
                 return last_rc
     finally:
@@ -86,9 +92,41 @@ def run_tui_loop(cfg) -> int:
         server.stop()
 
 
+def prompt_update_ranking(report_url: str) -> bool:
+    print(f"\nReports served at: {report_url}")
+    try:
+        answer = input("Update ranking results now? [Y/n] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in {"", "y", "yes"}
+
+
+def update_ranking_reports() -> bool:
+    cmd = [
+        sys.executable,
+        str(RANK_SCRIPT),
+        "--input",
+        str(RESULT_DIR),
+        "--output",
+        str(RESULT_DIR / "ranking.md"),
+    ]
+    print("Running ranking update...", flush=True)
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    if proc.stdout.strip():
+        print(proc.stdout.rstrip())
+    if proc.stderr.strip():
+        print(proc.stderr.rstrip())
+    if proc.returncode == 0:
+        print(f"Ranking updated: {RESULT_DIR / 'ranking.md'}")
+        print(f"Browser report: {RESULT_DIR / 'index.html'}")
+        return True
+    print(f"Ranking update failed (exit {proc.returncode}).")
+    return False
+
+
 def wait_for_enter(report_url: str) -> bool:
     print(f"\nReports served at: {report_url}")
-    print("Run finished. Returning to TUI; press Enter to continue...", flush=True)
+    print("Returning to TUI; press Enter to continue...", flush=True)
     try:
         input()
         return True
