@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # manage-server.sh — Manage llama-server systemd user services
-# Usage: ./manage-server.sh {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install}
+# Usage: ./manage-server.sh {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install|snapshot}
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-USAGE="Usage: $0 {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install}"
+USAGE="Usage: $0 {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install|snapshot}"
 MODE="${1:-}"
 ACTION="${2:-status}"
 
@@ -38,6 +38,19 @@ case "$ACTION" in
   logs)
     journalctl --user -u "$SERVICE_NAME" -f -n 100
     ;;
+  snapshot)
+    echo "== systemd status =="
+    systemctl --user --no-pager --full status "$SERVICE_NAME" || true
+    echo
+    echo "== recent logs =="
+    journalctl --user -u "$SERVICE_NAME" --no-pager -n 80 || true
+    echo
+    echo "== nvidia-smi =="
+    nvidia-smi --query-gpu=timestamp,name,temperature.gpu,power.draw,utilization.gpu,utilization.memory,memory.used,memory.total --format=csv || true
+    echo
+    echo "== llama-server metrics (:8080/metrics) =="
+    curl -fsS --max-time 3 http://127.0.0.1:8080/metrics || true
+    ;;
   enable)
     install_unit
     systemctl --user enable "$SERVICE_NAME"
@@ -56,7 +69,7 @@ case "$ACTION" in
     ;;
   *)
     echo "Unknown action: $ACTION"
-    echo "Usage: $0 {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install}"
+    echo "Usage: $0 {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install|snapshot}"
     exit 1
     ;;
 esac
