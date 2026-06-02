@@ -173,14 +173,14 @@ def main() -> int:
         return 0
 
     depth_best, pp_best, tg_best = rank_by_depth(paired_samples, score_mode=args.score)
-    overall = rank_overall(paired_samples, min_samples=max(1, args.min_samples), score_mode=args.score)
+    overall = rank_best_model_configs(paired_samples, min_samples=max(1, args.min_samples), score_mode=args.score)
     untested_models = find_untested_models(paired_samples)
-    all_candidate_rows = rows_to_csv_rows(paired_samples, args.score)
+    ranking_rows = aggregates_to_csv_rows(overall, paired_samples)
 
     output_md.parent.mkdir(parents=True, exist_ok=True)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     output_html.parent.mkdir(parents=True, exist_ok=True)
-    write_csv(output_csv, all_candidate_rows)
+    write_csv(output_csv, ranking_rows)
     output_md.write_text(render_markdown(output_md, input_dir, overall, depth_best, pp_best, tg_best, paired_samples, untested_models, args))
     output_html.write_text(render_html(output_html, input_dir, overall, depth_best, pp_best, tg_best, paired_samples, untested_models, args, output_csv, output_md))
     print(f"Wrote {output_md}")
@@ -341,7 +341,18 @@ def score_samples(samples: list[Sample], score_mode: str) -> list[Sample]:
     return sorted(ranked, key=lambda s: (s.score or 0.0, s.pp_tps or 0.0, s.tg_tps or 0.0), reverse=True)
 
 
-def rank_overall(samples: list[Sample], min_samples: int, score_mode: str) -> list[ConfigAggregate]:
+def rank_best_model_configs(samples: list[Sample], min_samples: int, score_mode: str) -> list[ConfigAggregate]:
+    """Rank each model once, keeping only its best-scoring config aggregate."""
+    config_rankings = rank_overall_configs(samples, min_samples=min_samples, score_mode=score_mode)
+    best_by_model: dict[str, ConfigAggregate] = {}
+    for agg in config_rankings:
+        key = model_identity(agg.model, agg.model_path)
+        if key not in best_by_model:
+            best_by_model[key] = agg
+    return list(best_by_model.values())
+
+
+def rank_overall_configs(samples: list[Sample], min_samples: int, score_mode: str) -> list[ConfigAggregate]:
     aggregates: dict[str, ConfigAggregate] = {}
     for sample in samples:
         agg = aggregates.get(sample.config_key)
@@ -399,6 +410,46 @@ def rank_overall(samples: list[Sample], min_samples: int, score_mode: str) -> li
         ),
         reverse=True,
     )
+
+
+def aggregates_to_csv_rows(overall: list[ConfigAggregate], samples: list[Sample]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for rank, agg in enumerate(overall, start=1):
+        rows.append(
+            {
+                "kind": "best_model",
+                "depth_rank": rank,
+                "depth": max_depth_for_config(samples, agg.config_key),
+                "run_dir": "",
+                "profile": "",
+                "model": agg.model,
+                "model_path": agg.model_path,
+                "cache_strategy": agg.cache_strategy,
+                "n_batch": agg.n_batch,
+                "n_ubatch": agg.n_ubatch,
+                "n_threads": agg.n_threads,
+                "n_cpu_moe": agg.n_cpu_moe,
+                "n_gpu_layers": agg.n_gpu_layers,
+                "flash_attn": agg.flash_attn,
+                "type_k": agg.type_k,
+                "type_v": agg.type_v,
+                "model_layers": agg.model_layers,
+                "cpu_moe_layers": agg.cpu_moe_layers,
+                "remaining_moe_layers": agg.remaining_moe_layers,
+                "pp_tps": median(agg.pp_values) if agg.pp_values else None,
+                "tg_tps": median(agg.tg_values) if agg.tg_values else None,
+                "pp_wall_s": None,
+                "tg_wall_s": None,
+                "wall_s": median_or_none(agg.wall_values),
+                "repetitions": None,
+                "normalized_pp": None,
+                "normalized_tg": None,
+                "score": median(agg.scores) if agg.scores else None,
+                "sample_count": agg.sample_count,
+                "config_key": agg.config_key,
+            }
+        )
+    return rows
 
 
 def rows_to_csv_rows(samples: list[Sample], score_mode: str) -> list[dict[str, Any]]:
@@ -540,6 +591,15 @@ def render_markdown(output_md: Path, input_dir: Path, overall: list[ConfigAggreg
     lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def model_identity(model: str, model_path: str = "") -> str:
+    """Stable identity for de-duplicating visible model rows.
+
+    Some summaries can miss model_path, so prefer the rendered label instead of
+    path-only identity to avoid ranking the same model twice.
+    """
+    return display_model_label(model, model_path).strip() or str(model_path).strip() or str(model).strip()
 
 
 def find_untested_models(samples: list[Sample]) -> list[str]:
