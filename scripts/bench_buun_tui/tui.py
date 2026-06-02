@@ -241,7 +241,7 @@ def research_best_known_action(stdscr) -> None:
     run_best_known_research_with_popup(stdscr)
 
 
-def update_model_presets_action(stdscr, initial_lines: list[str] | None = None) -> None:
+def update_model_presets_action(stdscr, initial_lines: list[str] | None = None) -> bool:
     script = ROOT / "scripts" / "update-buun-model-presets.py"
     cmd = [sys.executable, str(script)]
     output_lines = list(initial_lines or [])
@@ -279,6 +279,7 @@ def update_model_presets_action(stdscr, initial_lines: list[str] | None = None) 
         if metric_tail:
             lines.extend(["", "Output:", *metric_tail])
         show_scroll_text(stdscr, "Model preset update", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
+        return result.returncode == 0
     finally:
         stdscr.nodelay(False)
 
@@ -648,7 +649,7 @@ def selected_field_lines(profile: Profile, field: str, width: int) -> list[str]:
 def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
     if field == "__save_update_presets":
         lines = ["Save config & update presets", ""]
-        lines.extend(wrap_text("Saves the current benchmark config, then refreshes versions/buun/model-presets.ini from the best recorded benchmark results.", width))
+        lines.extend(wrap_text("Saves the current benchmark config, refreshes versions/buun/model-presets.ini from the best recorded benchmark results, then writes this profile's current settings back to the selected model preset.", width))
         return lines
     if field == "__run_this_profile":
         lines = ["Save config and run this profile only", ""]
@@ -693,7 +694,7 @@ def profile_action_lines(profile: Profile, field: str, width: int) -> list[str]:
 
 def handle_profile_editor_selection(stdscr, cfg: BenchConfig, profile: Profile, field: str, models: list[str], other_profile: Profile | None = None) -> Path | bool:
     if field == "__save_update_presets":
-        save_update_presets_action(stdscr, cfg)
+        save_update_presets_action(stdscr, cfg, profile)
         return False
     if field == "__run_this_profile":
         return save_run_single_profile_action(stdscr, cfg, profile)
@@ -719,10 +720,13 @@ def handle_profile_editor_selection(stdscr, cfg: BenchConfig, profile: Profile, 
     return False
 
 
-def save_update_presets_action(stdscr, cfg: BenchConfig) -> None:
+def save_update_presets_action(stdscr, cfg: BenchConfig, profile: Profile | None = None) -> None:
     path = CONFIG_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{slugify(cfg.run_prefix)}.ini"
     save_config(cfg, path)
-    update_model_presets_action(stdscr, initial_lines=[f"Saved config: {path}", ""])
+    updated = update_model_presets_action(stdscr, initial_lines=[f"Saved config: {path}", ""])
+    if updated and profile is not None and profile.model:
+        changes = upsert_profile_in_buun_presets(profile)
+        show_scroll_text(stdscr, "Selected model preset saved", changes, accept_text="q/Esc/Enter continue", enter_accepts=True)
 
 
 def save_run_single_profile_action(stdscr, cfg: BenchConfig, profile: Profile) -> Path | bool:
@@ -831,6 +835,152 @@ def preset_model_identities(model: str) -> set[str]:
     except OSError:
         pass
     return {item.strip() for item in identities if item and item.strip()}
+
+
+def upsert_profile_in_buun_presets(profile: Profile) -> list[str]:
+    preset_path = ROOT / "versions" / "buun" / "model-presets.ini"
+    preset_path.parent.mkdir(parents=True, exist_ok=True)
+    params = profile_preset_params(profile)
+    if not params:
+        return [f"No server preset parameters could be built for {model_label(profile.model)}."]
+    if not preset_path.exists():
+        preset_path.write_text("version = 1\n\n")
+    identities = preset_model_identities(profile.model)
+    lines = preset_path.read_text().splitlines()
+    output: list[str] = []
+    current: list[str] = []
+    updated_section = ""
+    used_sections: set[str] = set()
+    for line in lines:
+        if is_ini_section_header(line):
+            if current:
+                section_name = current[0].strip()[1:-1].strip()
+                used_sections.add(section_name)
+                if preset_section_matches_model(current, identities):
+                    current = update_preset_section_lines(current, params)
+                    updated_section = section_name
+                output.extend(current)
+            current = [line]
+        elif current:
+            current.append(line)
+        else:
+            output.append(line)
+    if current:
+        section_name = current[0].strip()[1:-1].strip()
+        used_sections.add(section_name)
+        if preset_section_matches_model(current, identities):
+            current = update_preset_section_lines(current, params)
+            updated_section = section_name
+        output.extend(current)
+    if not updated_section:
+        section_name = unique_preset_section_name(slugify(Path(profile.model).stem).lower(), used_sections | {"default"})
+        section_lines = [f"[{section_name}]", f"; saved from TUI profile {profile.name}"]
+        section_lines.extend(f"{key} = {value}" for key, value in params)
+        section_lines.extend(["load-on-startup = false", "stop-timeout = 10"])
+        if output and output[-1].strip():
+            output.append("")
+        output.extend(section_lines)
+        updated_section = section_name
+    preset_path.write_text("\n".join(output).rstrip() + "\n")
+    return [
+        f"Saved current {profile.name} settings for {model_label(profile.model)} to versions/buun/model-presets.ini [{updated_section}].",
+        "These values were applied after the best-results refresh, so they override generated values for the selected model.",
+    ]
+
+
+def profile_preset_params(profile: Profile) -> list[tuple[str, str]]:
+    k, v = resolve_cache_types(profile)
+    params: list[tuple[str, str]] = [("model", str(model_path(profile.model).resolve()))]
+    ctx_size = max_int_csv(profile.depths)
+    if ctx_size:
+        params.append(("ctx-size", str(ctx_size)))
+    if k:
+        params.append(("cache-type-k", k))
+    if v:
+        params.append(("cache-type-v", v))
+    threads = first_value(profile.threads)
+    if threads:
+        params.extend([("threads", threads), ("threads-batch", threads)])
+    batch = first_value(profile.batch_size)
+    if batch:
+        params.append(("batch-size", batch))
+    ubatch = first_value(profile.ubatch_size)
+    if ubatch:
+        params.append(("ubatch-size", ubatch))
+    n_cpu_moe = first_value(profile.n_cpu_moe)
+    if n_cpu_moe:
+        params.append(("n-cpu-moe", n_cpu_moe))
+    gpu_layers = first_value(profile.gpu_layers)
+    if gpu_layers:
+        params.append(("n-gpu-layers", gpu_layers))
+    device = first_value(profile.device)
+    if device:
+        params.append(("device", device))
+    flash_attn = first_value(profile.flash_attn)
+    if flash_attn:
+        params.append(("flash-attn", "on" if flash_attn.lower() in {"1", "true", "on", "yes"} else "off"))
+    no_mmap = first_value(profile.no_mmap)
+    if no_mmap:
+        params.append(("no-mmap", "true" if no_mmap.lower() in {"1", "true", "on", "yes"} else "false"))
+    return params
+
+
+def preset_section_matches_model(section_lines: list[str], identities: set[str]) -> bool:
+    for line in section_lines[1:]:
+        match = re.match(r"^\s*model\s*=\s*(.*?)\s*$", line)
+        if match:
+            return match.group(1).strip() in identities
+    return False
+
+
+def update_preset_section_lines(section_lines: list[str], params: list[tuple[str, str]]) -> list[str]:
+    updates = dict(params)
+    preserve_existing = {"ctx-size"}
+    seen: set[str] = set()
+    updated: list[str] = []
+    for line in section_lines:
+        match = re.match(r"^(\s*)([A-Za-z0-9_-]+)(\s*=\s*)(.*)$", line)
+        if match and match.group(2) in updates:
+            key = match.group(2)
+            seen.add(key)
+            if key in preserve_existing:
+                updated.append(line)
+            else:
+                updated.append(f"{match.group(1)}{key}{match.group(3)}{updates[key]}")
+        else:
+            updated.append(line)
+    insert_at = len(updated)
+    while insert_at > 0 and not updated[insert_at - 1].strip():
+        insert_at -= 1
+    missing = [f"{key} = {value}" for key, value in params if key not in seen]
+    if missing:
+        updated[insert_at:insert_at] = missing
+    return updated
+
+
+def first_value(value: str) -> str:
+    first = next((part.strip() for part in str(value).split(",") if part.strip()), "")
+    return "" if first.lower() in {"unset", "none", "default"} else first
+
+
+def max_int_csv(value: str) -> int | None:
+    vals: list[int] = []
+    for part in str(value).split(","):
+        try:
+            vals.append(int(part.strip()))
+        except ValueError:
+            continue
+    return max(vals) if vals else None
+
+
+def unique_preset_section_name(base: str, used: set[str]) -> str:
+    section = base or "model"
+    if section not in used:
+        return section
+    i = 2
+    while f"{section}-{i}" in used:
+        i += 1
+    return f"{section}-{i}"
 
 
 def is_ini_section_header(line: str) -> bool:
