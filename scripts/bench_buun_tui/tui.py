@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import curses
+import logging
 import shlex
 import time
 from dataclasses import dataclass
@@ -654,6 +655,11 @@ def smoke_test_preview_lines(profile: Profile, desired_context: int) -> list[str
     ]
 
 
+def smoke_test_output_tail(output: str, max_lines: int = 40) -> list[str]:
+    lines = [line.rstrip() for line in output.splitlines() if line.strip()]
+    return lines[-max_lines:]
+
+
 def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_context: int) -> bool:
     if not profile.model:
         show_message(stdscr, "Select a model before running a smoke test.")
@@ -678,7 +684,17 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
             result = run_smoke_test(profile, desired_context, on_output=on_output, timeout=1800, idle_timeout=180, on_heartbeat=on_heartbeat, cancel_check=cancel_check)
             cmd_text = shlex.join(result.command)
             diagnosis = diagnose_failure(result.output)
+            output_tail = smoke_test_output_tail(result.output)
             if not result.passed:
+                logging.info(
+                    "smoke test failed model=%s diagnosis=%s rc=%s reason=%s cmd=%s tail:\n%s",
+                    model_label(profile.model),
+                    diagnosis,
+                    result.returncode,
+                    result.reason or "",
+                    cmd_text,
+                    "\n".join(output_tail),
+                )
                 if result.timed_out or result.idle_timed_out or result.cancelled:
                     reason = result.reason or ("cancelled" if result.cancelled else "timed out")
                     lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Reason: {reason}", "", "Output:"]
@@ -687,8 +703,8 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
                     show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
                     return False
             lines = [f"Smoke test command: {cmd_text}", f"Return code: {result.returncode}", f"Diagnosis: {diagnosis}", "", "Output:"]
-            if result.output.strip():
-                lines.extend(result.output.strip().splitlines())
+            if output_tail:
+                lines.extend(output_tail)
             if result.passed:
                 lines.extend(["", "Smoke test passed."])
                 show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)

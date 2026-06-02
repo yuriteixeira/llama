@@ -5,6 +5,23 @@ from dataclasses import dataclass
 from .profile import Profile
 
 
+_LOAD_ERROR_TOKENS = [
+    "failed to load model",
+    "load model failed",
+    "error loading model",
+    "unknown model architecture",
+    "unsupported architecture",
+    "not supported",
+    "invalid model",
+    "invalid gguf",
+    "mmap failed",
+    "failed to initialize tokenizer",
+    "tokenizer error",
+    "model load failed",
+    "unable to load",
+]
+
+
 @dataclass(frozen=True)
 class RepairStep:
     gpu_layers: str
@@ -15,6 +32,10 @@ class RepairStep:
 def diagnose_failure(output: str) -> str:
     text = output.lower()
     if any(token in text for token in [
+        "timed out",
+    ]):
+        return "timeout"
+    if any(token in text for token in [
         "cudamalloc failed: out of memory",
         "failed to allocate cuda",
         "failed to allocate compute",
@@ -23,9 +44,8 @@ def diagnose_failure(output: str) -> str:
         "graph_reserve: failed",
         "out of memory",
         "cuda error",
-        "timed out",
     ]):
-        return "timeout" if "timed out" in text else "gpu_oom"
+        return "gpu_oom"
     if any(token in text for token in [
         "cannot allocate memory",
         "std::bad_alloc",
@@ -34,6 +54,8 @@ def diagnose_failure(output: str) -> str:
         "memory allocation failed",
     ]):
         return "host_oom"
+    if any(token in text for token in _LOAD_ERROR_TOKENS):
+        return "load_error"
     return "unknown"
 
 
@@ -65,6 +87,8 @@ def next_repair_step(
             ordered.append(candidate(ngl, moe - 1, "RAM OOM: decrease n_cpu_moe by 1"))
         if ngl < block_count + 1:
             ordered.append(candidate(ngl + 1, moe if moe is not None else None, "RAM OOM: increase gpu_layers by 1"))
+    elif diagnosis == "load_error":
+        return None
     else:
         if supports_moe is not False and moe is not None and moe < block_count:
             ordered.append(candidate(ngl, moe + 1, "unknown failure: increase n_cpu_moe by 1"))
