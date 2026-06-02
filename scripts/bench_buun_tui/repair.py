@@ -84,13 +84,22 @@ def next_repair_step(
     ordered: list[RepairStep | None] = []
     if diagnosis in {"gpu_oom", "timeout"}:
         if supports_moe is not False and moe is not None and moe < block_count:
+            midpoint = moe + max(1, (block_count - moe) // 2)
+            ordered.append(candidate(ngl, midpoint, "gpu OOM/timeout: bisect by increasing n_cpu_moe"))
             ordered.append(candidate(ngl, moe + 1, "gpu OOM/timeout: increase n_cpu_moe by 1"))
         if ngl > 0:
+            midpoint = max(0, ngl // 2)
+            ordered.append(candidate(midpoint, moe if moe is not None else None, "gpu OOM/timeout: bisect by lowering gpu_layers"))
             ordered.append(candidate(max(0, ngl - 1), moe if moe is not None else None, "gpu OOM/timeout: lower gpu_layers by 1"))
     elif diagnosis == "host_oom":
         if supports_moe is not False and moe is not None and moe > 0:
+            midpoint = max(0, moe // 2)
+            ordered.append(candidate(ngl, midpoint, "RAM OOM: bisect by decreasing n_cpu_moe"))
             ordered.append(candidate(ngl, moe - 1, "RAM OOM: decrease n_cpu_moe by 1"))
         if ngl < block_count + 1:
+            upper = block_count + 1
+            midpoint = ngl + max(1, (upper - ngl) // 2)
+            ordered.append(candidate(midpoint, moe if moe is not None else None, "RAM OOM: bisect by increasing gpu_layers"))
             ordered.append(candidate(ngl + 1, moe if moe is not None else None, "RAM OOM: increase gpu_layers by 1"))
     elif diagnosis in {"load_error", "cache_type_mismatch"}:
         return None

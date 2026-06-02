@@ -974,7 +974,10 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
             # restore non-blocking mode or popup_cancel_requested() can block the
             # next smoke-test process before any output is drawn.
             stdscr.nodelay(True)
-            output_lines = [f"Starting smoke test for {model_label(profile.model)}"]
+            output_lines = [
+                f"Starting smoke test for {model_label(profile.model)}",
+                f"Trying params: gpu_layers={profile.gpu_layers}, n_cpu_moe={profile.n_cpu_moe}",
+            ]
 
             def on_output(chunk: str) -> None:
                 append_output_lines(output_lines, chunk)
@@ -1030,7 +1033,7 @@ def run_smoke_test_and_repair_with_popup(stdscr, profile: Profile, desired_conte
             if step is None:
                 show_scroll_text(stdscr, "Smoke test result", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
                 return False
-            lines.extend(["", f"Next repair step: {step.label}", *change_lines([("gpu_layers", profile.gpu_layers, step.gpu_layers), ("n_cpu_moe", profile.n_cpu_moe, step.n_cpu_moe)])])
+            lines.extend(["", f"Next repair step: {step.label}", "Repair changes (highlighted):", *change_lines([("gpu_layers", profile.gpu_layers, step.gpu_layers), ("n_cpu_moe", profile.n_cpu_moe, step.n_cpu_moe)])])
             if not show_scroll_text(stdscr, "Smoke test result", lines, accept_text="Enter apply repair  •  q/Esc stop", enter_accepts=False):
                 return False
             tried.add((profile.gpu_layers, profile.n_cpu_moe))
