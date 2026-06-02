@@ -16,7 +16,7 @@ from .profile import CACHE_STRATEGIES, Profile
 
 BEST_KNOWN_PARAMS = CONFIG_DIR / "best-known-params.ini"
 SCHEMA_VERSION = "1"
-APPLICABLE_FIELDS = {key for key, _ in Profile("profile").items()} - {"model"}
+APPLICABLE_FIELDS = {key for key, _ in Profile("profile").items()} - {"model", "depths"}
 BOOLEAN_FIELDS = {"warmup", "flash_attn", "no_mmap"}
 NUMERIC_LIST_FIELDS = {
     "depths",
@@ -41,6 +41,7 @@ RESEARCH_FIELDS = {
     "research_summary",
     "confidence",
     "references",
+    "depths",
 }
 
 
@@ -265,7 +266,7 @@ def build_research_prompt(models: list[str]) -> str:
                 ]
             )
         )
-    profile_fields = ", ".join(key for key, _ in Profile("profile").items() if key != "model")
+    profile_fields = ", ".join(key for key in APPLICABLE_FIELDS)
     caches = ", ".join(CACHE_STRATEGIES)
     return f"""
 Research best-known llama.cpp/buun benchmark and llama-server parameters for these local GGUF models on this hardware: NVIDIA RTX 3070 8GB VRAM, about 12 CPU threads, 16GB+ RAM.
@@ -274,7 +275,8 @@ Return ONLY an INI document. Do not include prose outside the INI. Use one secti
 
 Allowed auto-applied profile fields: {profile_fields}
 Allowed cache_strategy values: {caches}
-Use comma-separated integers for multi-value benchmark fields. Use unset when a parameter should not be passed.
+Do not include depths as a recommended parameter; depths is only for benchmark sweeps and must not be changed by best-known params.
+Recommend one best-known value per field, not a list of possible values. Use a single integer for numeric fields. Use unset when a parameter should not be passed.
 Include research_summary, confidence, references, architecture, quantization, is_mtp, is_reap, supports_moe, active_params when knowable.
 
 Models:
