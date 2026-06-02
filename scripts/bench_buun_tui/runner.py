@@ -123,7 +123,7 @@ def profile_error(profile, err_path: Path, returncode: int, live_summary: Path) 
 def write_final_outputs(out_dir: Path, live_summary: Path, all_rows: list[dict], telemetry_rows: list[dict], errors: list[dict]) -> None:
     summary = out_dir / "summary.csv"
     telemetry = out_dir / "telemetry.json"
-    report = out_dir / "report.html"
+    report = out_dir / "index.html"
     write_summary(all_rows, summary)
     telemetry.write_text(json.dumps(telemetry_rows, indent=2))
     write_html_report(all_rows, report, errors, telemetry_rows)
@@ -131,3 +131,4 @@ def write_final_outputs(out_dir: Path, live_summary: Path, all_rows: list[dict],
     print(f"live:    {live_summary}")
     print(f"telemetry: {telemetry}")
     print(f"report:    {report}")
+    print(f"report URL path: /{out_dir.name}/")

@@ -169,8 +169,13 @@ def generate_best_known_params(path: Path = BEST_KNOWN_PARAMS) -> Path:
     return run_best_known_research(path).path
 
 
-def run_best_known_research(path: Path = BEST_KNOWN_PARAMS, on_output: Callable[[str], None] | None = None, stream: bool = False) -> ResearchRun:
-    models = find_models()
+def run_best_known_research(
+    path: Path = BEST_KNOWN_PARAMS,
+    on_output: Callable[[str], None] | None = None,
+    stream: bool = False,
+    models: list[str] | None = None,
+) -> ResearchRun:
+    models = models or find_models()
     prompt = build_research_prompt(models)
     cmd = ["pi", "--mode", "json", prompt] if stream else ["pi", "-p", prompt]
     command = shlex.join(cmd)
@@ -220,13 +225,16 @@ def run_research_command_json(cmd: list[str], command: str, on_output: Callable[
     assert proc.stdout is not None
     for line in proc.stdout:
         raw_parts.append(line)
-        delta = extract_json_stream_delta(line)
+        event = parse_json_stream_event(line)
+        delta = extract_json_stream_delta(event)
         if delta:
             output_parts.append(delta)
             if on_output:
                 on_output(delta)
-        elif on_output and not line.lstrip().startswith("{"):
-            on_output(line)
+        elif on_output:
+            status = format_json_stream_status(event) if event else line
+            if status:
+                on_output(status)
     returncode = proc.wait()
     output = "".join(output_parts)
     raw_output = "".join(raw_parts)
@@ -237,16 +245,45 @@ def run_research_command_json(cmd: list[str], command: str, on_output: Callable[
     return output
 
 
-def extract_json_stream_delta(line: str) -> str:
+def parse_json_stream_event(line: str) -> dict | None:
     try:
-        event = json.loads(line)
+        return json.loads(line)
     except json.JSONDecodeError:
-        return ""
-    if event.get("type") != "message_update":
+        return None
+
+
+def extract_json_stream_delta(event: dict | None) -> str:
+    if not event or event.get("type") != "message_update":
         return ""
     assistant_event = event.get("assistantMessageEvent") or {}
     if assistant_event.get("type") == "text_delta":
         return str(assistant_event.get("delta") or "")
+    return ""
+
+
+def format_json_stream_status(event: dict | None) -> str:
+    if not event:
+        return ""
+    event_type = event.get("type")
+    if event_type == "session":
+        return f"\n[pi] session {event.get('id', 'started')}\n"
+    if event_type in {"agent_start", "turn_start"}:
+        return f"[pi] {event_type}\n"
+    if event_type == "message_update":
+        assistant_event = event.get("assistantMessageEvent") or {}
+        assistant_type = assistant_event.get("type")
+        if assistant_type in {"start", "text_start", "thinking_start", "toolcall_start"}:
+            return f"[pi] assistant {assistant_type}\n"
+        if assistant_type == "thinking_delta":
+            return "."
+        if assistant_type in {"thinking_end", "toolcall_end", "text_end", "done"}:
+            return f"\n[pi] assistant {assistant_type}\n"
+        if assistant_type == "error":
+            return f"\n[pi] assistant error\n"
+    if event_type in {"message_start", "message_end", "turn_end", "agent_end"}:
+        return f"[pi] {event_type}\n"
+    if event_type and event_type.startswith("tool_execution_"):
+        return f"[pi] {event_type}: {event.get('toolName', '')}\n"
     return ""
 
 
@@ -269,7 +306,7 @@ def build_research_prompt(models: list[str]) -> str:
     profile_fields = ", ".join(key for key in APPLICABLE_FIELDS)
     caches = ", ".join(CACHE_STRATEGIES)
     return f"""
-Research best-known llama.cpp/buun benchmark and llama-server parameters for these local GGUF models on this hardware: NVIDIA RTX 3070 8GB VRAM, about 12 CPU threads, 16GB+ RAM.
+Research best-known llama.cpp/buun benchmark and llama-server parameters for these local GGUF models on this hardware: NVIDIA RTX 3070 8GB VRAM, about 12 CPU threads, {ram_description()}.
 
 Return ONLY an INI document. Do not include prose outside the INI. Use one section per model named exactly [model:<relative_path>]. Include research metadata and recommendations.
 
@@ -283,6 +320,18 @@ Models:
 
 {'\n\n---\n\n'.join(model_blocks)}
 """.strip()
+
+
+def ram_description() -> str:
+    try:
+        meminfo = Path("/proc/meminfo").read_text()
+    except OSError:
+        return "16GB RAM"
+    match = re.search(r"^MemTotal:\s+(\d+)\s+kB", meminfo, re.MULTILINE)
+    if not match:
+        return "16GB RAM"
+    gib = int(match.group(1)) / 1024 / 1024
+    return f"about {round(gib)} GiB RAM"
 
 
 def parse_research_output(output: str) -> configparser.ConfigParser:

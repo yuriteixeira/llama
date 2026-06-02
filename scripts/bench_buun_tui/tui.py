@@ -39,15 +39,16 @@ def new_default_config(models: list[str]) -> BenchConfig:
     return cfg
 
 
-def tui_main(stdscr, cfg: BenchConfig | None = None) -> Path | None:
+def tui_main(stdscr, cfg: BenchConfig | None = None, report_url: str = "") -> Path | None:
     curses.curs_set(0)
-    state = TuiState(cfg or new_default_config(find_models()))
+    state = TuiState(cfg or new_default_config(find_models()), report_url)
     return main_menu(stdscr, state)
 
 
 class TuiState:
-    def __init__(self, cfg: BenchConfig):
+    def __init__(self, cfg: BenchConfig, report_url: str = ""):
         self.cfg = cfg
+        self.report_url = report_url
         self.models = find_models()
         self.selected = 0
         self.actions = [
@@ -73,16 +74,18 @@ def main_menu(stdscr, state: TuiState) -> Path | None:
 def draw_main_menu(stdscr, state: TuiState) -> None:
     stdscr.clear()
     layout = main_menu_layout()
-    draw_header_panel(stdscr, layout["header"], state.cfg.run_prefix)
+    draw_header_panel(stdscr, layout["header"], state.cfg.run_prefix, state.report_url)
     draw_actions_panel(stdscr, layout["actions"], state.actions, state.selected)
     draw_profiles_panel(stdscr, layout["profiles"], state.cfg.profiles)
     draw_help_panel(stdscr, layout["help"], "↑/↓ move  •  Enter select  •  q/Esc quit")
 
 
-def draw_header_panel(stdscr, panel: "Panel", run_prefix: str) -> None:
+def draw_header_panel(stdscr, panel: "Panel", run_prefix: str, report_url: str = "") -> None:
     draw_panel(stdscr, panel, "Buun llama-bench TUI")
     write_in_panel(stdscr, panel, 0, "Configure two reproducible benchmark profiles")
     write_in_panel(stdscr, panel, 1, f"Run prefix: {run_prefix}")
+    if report_url:
+        write_in_panel(stdscr, panel, 2, f"Reports: {report_url}")
 
 
 def draw_actions_panel(stdscr, panel: "Panel", actions: list[str], selected: int) -> None:
@@ -166,16 +169,17 @@ def research_best_known_action(stdscr) -> None:
     run_best_known_research_with_popup(stdscr)
 
 
-def run_best_known_research_with_popup(stdscr) -> bool:
-    output_lines = ["Starting pi -p research..."]
+def run_best_known_research_with_popup(stdscr, models: list[str] | None = None) -> bool:
+    scope = f" for {models[0]}" if models and len(models) == 1 else " for all models"
+    output_lines = [f"Starting pi streaming research{scope} with: pi --mode json <research prompt>"]
 
     def on_output(chunk: str) -> None:
         append_output_lines(output_lines, chunk)
         draw_output_popup(stdscr, "Researching best-known params", output_lines, "Streaming pi output... wait for completion")
 
-    draw_output_popup(stdscr, "Researching best-known params", output_lines, "Starting pi -p...")
+    draw_output_popup(stdscr, "Researching best-known params", output_lines, "Starting pi --mode json...")
     try:
-        run = run_best_known_research(on_output=on_output, stream=True)
+        run = run_best_known_research(on_output=on_output, stream=True, models=models)
     except ResearchError as exc:
         lines = research_result_lines(
             saved_path=None,
@@ -186,7 +190,7 @@ def run_best_known_research_with_popup(stdscr) -> bool:
         show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
         return False
     except Exception as exc:
-        lines = research_result_lines(saved_path=None, command="pi -p <research prompt>", response="\n".join(output_lines), error=str(exc))
+        lines = research_result_lines(saved_path=None, command="pi --mode json <research prompt>", response="\n".join(output_lines), error=str(exc))
         show_scroll_text(stdscr, "Best-known params research errored", lines, accept_text="q/Esc/Enter back", enter_accepts=True)
         return False
     lines = research_result_lines(saved_path=run.path, command=run.command, response=run.response)
@@ -429,7 +433,7 @@ def load_best_known_for_profile(stdscr, profile: Profile) -> None:
     if not recs:
         if not confirm_research_missing_recommendation(stdscr, profile):
             return
-        if not run_best_known_research_with_popup(stdscr):
+        if not run_best_known_research_with_popup(stdscr, models=[profile.model]):
             return
         recs = find_recommendations(profile.model)
     if not recs:
@@ -450,7 +454,7 @@ def confirm_research_missing_recommendation(stdscr, profile: Profile) -> bool:
         f"Model: {profile.model}",
         f"Recommendation file: {BEST_KNOWN_PARAMS}",
         "",
-        "Press Enter to run pi -p research now and watch the output live.",
+        "Press Enter to run streaming pi research for this model only and watch the output live.",
     ]
     return show_scroll_text(stdscr, "Research best-known params now?", lines, accept_text="Enter research  •  q/Esc cancel")
 
@@ -499,7 +503,7 @@ def recommendation_preview_lines(profile: Profile, rec, plan) -> list[str]:
     command = research_meta.get("source")
     response = research_meta.get("response")
     if command or response:
-        lines.extend(["", "pi -p research run:"])
+        lines.extend(["", "pi research run:"])
         if command:
             lines.extend(["  Command ran:", command])
         if response:
@@ -692,7 +696,7 @@ class Panel:
 
 def main_menu_layout() -> dict[str, Panel]:
     rows, cols = screen_size()
-    header = Panel(0, 0, 4, cols)
+    header = Panel(0, 0, 5, cols)
     help_panel = Panel(max(0, rows - 3), 0, 3, cols)
     body_height = max(3, rows - header.height - help_panel.height)
     left_width = max(28, min(38, cols // 3))
