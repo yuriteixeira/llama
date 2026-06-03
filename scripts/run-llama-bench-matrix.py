@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Run the full llama benchmark matrix.
 
-This is the one-shot runner: it starts each server, waits for health, runs the
+This is the one-shot runner: it starts llama-server, waits for health, runs the
 prompt suite, stops the server, and repeats for every permutation of:
 
-  model x transport x context size x server
+  model x transport x context size
 
 The three main knobs are:
   --models      label=path,label=path or just path,path
@@ -96,16 +96,51 @@ def stop_process(proc: subprocess.Popen) -> None:
         proc.wait(timeout=10)
 
 
-def server_command(root: Path, server: str) -> tuple[list[str], dict]:
+def server_command(root: Path, model: str, ctx: int, alias: str, port: int) -> tuple[list[str], dict]:
     env = os.environ.copy()
-    if server == "vanilla":
-        return [str(root / "serve.sh")], env
-    if server == "buun":
-        build = root / BUUN_LIB_REL
-        old_ld = env.get("LD_LIBRARY_PATH")
-        env["LD_LIBRARY_PATH"] = f"{build / 'bin'}:{build / 'src'}" + (f":{old_ld}" if old_ld else "")
-        return [str(root / "serve-buun.sh")], env
-    raise ValueError(f"unknown server: {server}")
+    build = root / BUUN_LIB_REL
+    old_ld = env.get("LD_LIBRARY_PATH")
+    env["LD_LIBRARY_PATH"] = f"{build / 'bin'}:{build / 'src'}" + (f":{old_ld}" if old_ld else "")
+    cmd = [
+        str(build / "bin" / "llama-server"),
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(port),
+        "--model",
+        model,
+        "--alias",
+        alias,
+        "--ctx-size",
+        str(ctx),
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "--threads",
+        "12",
+        "--threads-batch",
+        "12",
+        "--threads-http",
+        "4",
+        "--batch-size",
+        "1024",
+        "--ubatch-size",
+        "256",
+        "--fit-target",
+        "512",
+        "--device",
+        "CUDA0",
+        "--parallel",
+        "1",
+        "--flash-attn",
+        "on",
+        "--metrics",
+        "--reasoning",
+        "off",
+        "--no-mmproj",
+    ]
+    return cmd, env
 
 
 def bench_args(args, transport: str, label: str, ctx: int, alias: str) -> list[str]:
@@ -149,19 +184,13 @@ def bench_args(args, transport: str, label: str, ctx: int, alias: str) -> list[s
     return cmd
 
 
-def run_one(args, root: Path, raw_dir: Path, server: str, model: dict, ctx: int, transport: str) -> dict:
-    alias = args.alias_template.format(model=model["label"], server=server, ctx=ctx)
-    label = f"{server}-{model['label']}-ctx{ctx}-{transport}"
+def run_one(args, root: Path, raw_dir: Path, model: dict, ctx: int, transport: str) -> dict:
+    alias = args.alias_template.format(model=model["label"], ctx=ctx)
+    label = f"{model['label']}-ctx{ctx}-{transport}"
     server_log_path = raw_dir / f"{label}.server.log"
     result_path = raw_dir / f"{label}.results.json"
 
-    cmd, env = server_command(root, server)
-    env.update({
-        "MODEL_FILE": model["path"],
-        "CTX_SIZE": str(ctx),
-        "ALIAS": alias,
-        "PORT": str(args.port),
-    })
+    cmd, env = server_command(root, model["path"], ctx, alias, args.port)
 
     print(f"START {label} — model {model['display_label']}", file=sys.stderr, flush=True)
     with server_log_path.open("w") as server_log:
@@ -185,7 +214,6 @@ def run_one(args, root: Path, raw_dir: Path, server: str, model: dict, ctx: int,
         except Exception as exc:
             error = {
                 "label": label,
-                "server": server,
                 "model": model,
                 "ctx": ctx,
                 "transport": transport,
@@ -197,7 +225,6 @@ def run_one(args, root: Path, raw_dir: Path, server: str, model: dict, ctx: int,
 
     result = load_result(result_path)
     result.update({
-        "server": server,
         "model_label": model["label"],
         "model_display": model["display_label"],
         "model_path": model["path"],
@@ -229,7 +256,6 @@ def compact_metrics(results: list[dict]) -> list[dict]:
         ok = [r for r in tests if "wall_s" in r and r.get("returncode", 0) == 0 and "error" not in r]
         errors = len(tests) - len(ok) + (1 if item.get("error") and not tests else 0)
         rows.append({
-            "server": item.get("server"),
             "model": item.get("model_display") or item.get("model_label"),
             "context": item.get("ctx"),
             "transport": item.get("transport_requested"),
@@ -258,8 +284,8 @@ def summarize(results: list[dict], llm_analysis: str | None = None) -> str:
         "",
         "## Summary",
         "",
-        "| server | model | context | transport | total wall | avg wall | errors |",
-        "|---|---|---:|---|---:|---:|---:|",
+        "| model | context | transport | total wall | avg wall | errors |",
+        "|---|---:|---|---:|---:|---:|",
     ]
 
     for item in results:
@@ -269,13 +295,13 @@ def summarize(results: list[dict], llm_analysis: str | None = None) -> str:
         total = sum(r["wall_s"] for r in ok)
         avg = statistics.mean([r["wall_s"] for r in ok]) if ok else 0
         lines.append(
-            f"| {item.get('server')} | {item.get('model_display') or item.get('model_label')} | {item.get('ctx') // 1024}k | "
+            f"| {item.get('model_display') or item.get('model_label')} | {item.get('ctx') // 1024}k | "
             f"{item.get('transport_requested')} | {total:.2f}s | {avg:.2f}s | {errors} |"
         )
 
     lines += ["", "## Per-prompt wall times", ""]
-    lines.append("| server | model | context | transport | prompt | wall | status |")
-    lines.append("|---|---|---:|---|---|---:|---|")
+    lines.append("| model | context | transport | prompt | wall | status |")
+    lines.append("|---|---:|---|---|---:|---|")
     for item in results:
         for test in item.get("results", []):
             prompt = PROMPT_NAMES.get(test.get("id"), test.get("id", "unknown"))
@@ -284,7 +310,7 @@ def summarize(results: list[dict], llm_analysis: str | None = None) -> str:
             if "error" in test:
                 status = "error"
             lines.append(
-                f"| {item.get('server')} | {item.get('model_display') or item.get('model_label')} | {item.get('ctx') // 1024}k | "
+                f"| {item.get('model_display') or item.get('model_label')} | {item.get('ctx') // 1024}k | "
                 f"{item.get('transport_requested')} | {prompt} | {wall} | {status} |"
             )
     lines.append("")
@@ -318,16 +344,10 @@ def generate_llm_analysis(args, root: Path, raw_dir: Path, results: list[dict], 
     model = next((m for m in models if m["label"] == args.analysis_model), models[0]) if args.analysis_model else models[0]
     ctx = args.analysis_context or max(contexts)
     alias = args.analysis_alias
-    label = f"analysis-{args.analysis_server}-{model['label']}-ctx{ctx}"
+    label = f"analysis-{model['label']}-ctx{ctx}"
     server_log_path = raw_dir / f"{label}.server.log"
 
-    cmd, env = server_command(root, args.analysis_server)
-    env.update({
-        "MODEL_FILE": model["path"],
-        "CTX_SIZE": str(ctx),
-        "ALIAS": alias,
-        "PORT": str(args.port),
-    })
+    cmd, env = server_command(root, model["path"], ctx, alias, args.port)
 
     prompt = (
         "Generate markdown sections named exactly `## Observations` and `## Conclusion` for these benchmark results.\n"
@@ -361,20 +381,18 @@ def main() -> int:
     parser.add_argument("--models", default=DEFAULT_MODEL, help="Comma list of model paths or label=path entries")
     parser.add_argument("--transports", default="curl,pi-blank,pi-current", help="Comma list: curl,pi-blank,pi-current")
     parser.add_argument("--contexts", default="32768,65536,131072,262144", help="Comma list of context sizes")
-    parser.add_argument("--servers", default="vanilla,buun", help="Comma list: vanilla,buun")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--health-url", default="http://127.0.0.1:8080/health")
     parser.add_argument("--startup-timeout", type=int, default=600)
     parser.add_argument("--prompt-timeout", type=int, default=420, help="Timeout passed to each prompt call")
     parser.add_argument("--suite-timeout", type=int, default=3600, help="Timeout for one full prompt suite")
     parser.add_argument("--cooldown", type=float, default=3)
-    parser.add_argument("--alias-template", default="selected", help="Server model alias; fields: {model}, {server}, {ctx}")
+    parser.add_argument("--alias-template", default="selected", help="Server model alias; fields: {model}, {ctx}")
     parser.add_argument("--pi-current-pass-model", action="store_true", help="Pass --model <alias> to pi-current runs")
     parser.add_argument("--pi-current-no-session", action="store_true", help="Pass --pi-no-session to pi-current runs")
     parser.add_argument("--pi-current-no-tools", action="store_true", help="Pass --pi-no-tools to pi-current runs")
     parser.add_argument("--bench-extra-args", default="", help="Extra flags for bench-llama-suite.py")
     parser.add_argument("--llm-analysis", action=argparse.BooleanOptionalAction, default=True, help="After the matrix, start llama-server and ask it to generate observations/conclusion; enabled by default")
-    parser.add_argument("--analysis-server", choices=["vanilla", "buun"], default="buun")
     parser.add_argument("--analysis-model", help="Model label to use for analysis; defaults to the first --models entry")
     parser.add_argument("--analysis-context", type=int, help="Context size for analysis; defaults to the largest --contexts value")
     parser.add_argument("--analysis-alias", default="analysis")
@@ -387,16 +405,10 @@ def main() -> int:
     models = parse_models(args.models, root)
     transports = split_csv(args.transports)
     contexts = [int(x) for x in split_csv(args.contexts)]
-    servers = split_csv(args.servers)
-
     allowed_transports = {"curl", "pi-blank", "pi-current"}
-    allowed_servers = {"vanilla", "buun"}
     bad_transports = set(transports) - allowed_transports
-    bad_servers = set(servers) - allowed_servers
     if bad_transports:
         raise SystemExit(f"unknown transports: {sorted(bad_transports)}")
-    if bad_servers:
-        raise SystemExit(f"unknown servers: {sorted(bad_servers)}")
 
     if args.out_dir:
         out_dir = Path(args.out_dir)
@@ -406,10 +418,9 @@ def main() -> int:
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     matrix = [
-        (server, model, ctx, transport)
+        (model, ctx, transport)
         for model in models
         for ctx in contexts
-        for server in servers
         for transport in transports
     ]
 
@@ -417,8 +428,8 @@ def main() -> int:
     print(f"out: {out_dir}", file=sys.stderr)
 
     results = []
-    for server, model, ctx, transport in matrix:
-        results.append(run_one(args, root, raw_dir, server, model, ctx, transport))
+    for model, ctx, transport in matrix:
+        results.append(run_one(args, root, raw_dir, model, ctx, transport))
         (out_dir / "all-results.json").write_text(json.dumps(results, indent=2) + "\n")
         (out_dir / "bench.md").write_text(summarize(results))
 

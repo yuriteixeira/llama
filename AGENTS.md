@@ -2,16 +2,14 @@
 
 ## Overview
 
-This repository contains a local LLM inference setup using **llama.cpp** to serve large language models as API servers on local hardware. It supports two server variants and includes benchmarking tools.
+This repository contains a local LLM inference setup using the **buun llama.cpp fork** to serve large language models as an API server on local hardware. It includes benchmarking tools.
 
 
 ## Systemd Services
 
-Both variants (vanilla & buun) ship as user-scoped systemd services for auto-start on login through `./manage-server.sh`
+`llama-server.service` is a user-scoped systemd service for auto-start on login through `./manage-server.sh`.
 
-> **Note:** Both variants default to port 8080 — only run one at a time, or change the `--port` in the respective `.service` file.
-
-Services are installed to `~/.config/systemd/user/` on first use. They auto-restart on crash (10 s delay).
+The service is installed to `~/.config/systemd/user/` on first use. It auto-restarts on crash (10 s delay).
 
 
 ## Benchmarking

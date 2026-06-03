@@ -1,25 +1,13 @@
 #!/usr/bin/env bash
-# manage-server.sh — Manage llama-server systemd user services
-# Usage: ./manage-server.sh {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install|snapshot}
+# manage-server.sh — Manage the llama-server systemd user service
+# Usage: ./manage-server.sh {start|stop|restart|status|enable|disable|logs|install|snapshot}
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-USAGE="Usage: $0 {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install|snapshot}"
-MODE="${1:-}"
-ACTION="${2:-status}"
-
-if [ -z "$MODE" ]; then
-  echo "$USAGE"
-  exit 1
-fi
-
-case "$MODE" in
-  vanilla) SERVICE_NAME="llama-server.service" ;;
-  buun)    SERVICE_NAME="llama-server-buun.service" ;;
-  *)       echo "Unknown mode: $MODE (use vanilla or buun)"; exit 1 ;;
-esac
-
+USAGE="Usage: $0 {start|stop|restart|status|enable|disable|logs|install|snapshot}"
+ACTION="${1:-status}"
+SERVICE_NAME="llama-server.service"
 SERVICE_FILE="$SCRIPT_DIR/$SERVICE_NAME"
 USER_SYSTEMD_DIR="$HOME/.config/systemd/user"
 INSTALLED_SERVICE_FILE="$USER_SYSTEMD_DIR/$SERVICE_NAME"
@@ -69,7 +57,7 @@ case "$ACTION" in
     ;;
   *)
     echo "Unknown action: $ACTION"
-    echo "Usage: $0 {vanilla|buun} {start|stop|restart|status|enable|disable|logs|install|snapshot}"
+    echo "$USAGE"
     exit 1
     ;;
 esac

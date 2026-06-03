@@ -98,9 +98,7 @@ def selected_profile(args: argparse.Namespace, cfg) -> Profile:
 
 def stop_llama_servers() -> None:
     candidates = [
-        ["./manage-server.sh", "buun", "stop"],
-        ["./manage-server.sh", "vanilla", "stop"],
-        ["systemctl", "--user", "stop", "llama-server-buun.service"],
+        ["./manage-server.sh", "stop"],
         ["systemctl", "--user", "stop", "llama-server.service"],
     ]
     stopped_any = False

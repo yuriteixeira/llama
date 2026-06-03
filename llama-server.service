@@ -1,6 +1,6 @@
 [Unit]
-Description=Llama.cpp Local LLM Server (Vanilla)
-Documentation=https://github.com/ggerganov/llama.cpp
+Description=Llama.cpp Local LLM Server
+Documentation=https://github.com/spiritbuun/buun-llama-cpp
 After=network-online.target gpu.service
 Wants=network-online.target
 
@@ -10,39 +10,18 @@ Type=simple
 # Working directory
 WorkingDirectory=/home/yuriteixeira/Workspaces/local/services/llama
 
-# The actual server binary and its arguments (mirrors serve.sh defaults)
-ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/vanilla/install/bin/llama-server \
+# The router process; per-model arguments live in versions/buun/model-presets.ini
+ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/buun/src/buun-llama-cpp/build/bin/llama-server \
   --host 0.0.0.0 \
   --port 8080 \
-  --model /home/yuriteixeira/Workspaces/local/services/llama/models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf \
-  --alias selected \
-  --ctx-size 32768 \
-  --cache-type-k q8_0 \
-  --cache-type-v q8_0 \
-  --threads 12 \
-  --threads-batch 12 \
+  --models-preset /home/yuriteixeira/Workspaces/local/services/llama/versions/buun/model-presets.ini \
+  --models-max 1 \
   --threads-http 4 \
-  --batch-size 1024 \
-  --ubatch-size 256 \
-  --fit-target 512 \
-  --device CUDA0 \
-  --parallel 1 \
-  --flash-attn on \
-  --metrics \
-  --reasoning off \
-  --no-mmproj
+  --metrics
 
 # Restart policy
 Restart=always
 RestartSec=10
-
-# Environment overrides (optional, uncomment and adjust as needed)
-# Environment=THREADS=12
-# Environment=THREADS_BATCH=12
-# Environment=THREADS_HTTP=4
-# Environment=CTX_SIZE=32768
-# Environment=BATCH_SIZE=1024
-# Environment=REASONING=off
 
 # Resource limits
 LimitNOFILE=65536
@@ -51,7 +30,7 @@ LimitMEMLOCK=infinity
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=llama-server-vanilla
+SyslogIdentifier=llama-server
 
 # Security hardening
 ProtectSystem=full

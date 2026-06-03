@@ -1,9 +1,6 @@
 # Benchmarks
 
-This directory contains benchmark notes and raw outputs for the local `llama-server` launchers:
-
-- `serve.sh` — vanilla llama.cpp server
-- `serve-buun.sh` — buun llama.cpp server
+This directory contains benchmark notes and raw outputs for the local `llama-server.service`, which runs the `versions/buun` build.
 
 The one-shot benchmark runner is:
 
@@ -11,12 +8,11 @@ The one-shot benchmark runner is:
 scripts/run-llama-bench-matrix.py
 ```
 
-It starts the servers, waits for health, runs the prompt suite, stops the servers, and repeats for every permutation of:
+It starts the server, waits for health, runs the prompt suite, stops the server, and repeats for every permutation of:
 
 - models
 - transports
 - context sizes
-- server launchers (`vanilla` and `buun` by default)
 
 The lower-level prompt-suite client is:
 
@@ -39,7 +35,6 @@ Defaults:
 - models: `models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf` (`Qwen3.6-35B-A3B-UD-IQ4_NL.gguf [35B total, A3B active, MoE]`)
 - transports: `curl,pi-blank,pi-current`
 - contexts: `32768,65536,131072,262144`
-- servers: `vanilla,buun`
 
 Results are written to:
 
@@ -125,7 +120,6 @@ To skip this analysis pass, use:
 
 Defaults for the analysis pass:
 
-- analysis server: `buun`
 - analysis model: first model in `--models`
 - analysis context: largest context in `--contexts`
 
@@ -136,7 +130,6 @@ scripts/run-llama-bench-matrix.py \
   --models "qwen36=models/unsloth/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf" \
   --transports "curl" \
   --contexts "32768" \
-  --analysis-server vanilla \
   --analysis-model qwen36 \
   --analysis-context 32768
 ```
@@ -149,127 +142,17 @@ The generated analysis is appended to `bench.md` under:
 
 The raw generated text is also saved in `raw/analysis-*.analysis.md`.
 
-## Lower-level direct HTTP benchmark
+## Direct HTTP and pi benchmarks
 
-Start one server in a terminal:
-
-```sh
-CTX_SIZE=32768 ./serve.sh
-```
-
-Then run the suite in another terminal:
+Use the matrix runner for repeatable runs:
 
 ```sh
-python3 scripts/bench-llama-suite.py \
-  --transport http \
-  --label vanilla-32k \
-  > /tmp/vanilla-32k.results.json
+scripts/run-llama-bench-matrix.py \
+  --transports curl,pi-blank,pi-current \
+  --contexts 32768,65536,131072,262144
 ```
 
-For buun:
-
-```sh
-LD_LIBRARY_PATH="$PWD/versions/buun/src/buun-llama-cpp/build/bin:$PWD/versions/buun/src/buun-llama-cpp/build/src" \
-CTX_SIZE=32768 ./serve-buun.sh
-```
-
-Then:
-
-```sh
-python3 scripts/bench-llama-suite.py \
-  --transport http \
-  --label buun-32k \
-  > /tmp/buun-32k.results.json
-```
-
-## Quick start: pi print-mode benchmark
-
-Start a server first:
-
-```sh
-CTX_SIZE=32768 ./serve.sh
-```
-
-Then run the same prompts through `pi -p`:
-
-```sh
-python3 scripts/bench-llama-suite.py \
-  --transport pi \
-  --label vanilla-32k-pi \
-  --pi-context-window 32768 \
-  > /tmp/vanilla-32k-pi.results.json
-```
-
-The script creates a temporary `PI_CODING_AGENT_DIR` with a local OpenAI-compatible provider pointing at:
-
-```text
-http://127.0.0.1:8080/v1
-```
-
-By default, pi tools, context files, extensions, skills, prompt templates, themes, and sessions are disabled to keep runs repeatable.
-
-## Pi mode with your current pi configuration
-
-If you want to benchmark your real/default pi setup instead of the isolated temporary local-provider config, use `--pi-current-config`:
-
-```sh
-python3 scripts/bench-llama-suite.py \
-  --transport pi \
-  --pi-current-config \
-  --label current-pi \
-  > /tmp/current-pi.results.json
-```
-
-In this mode the script does **not** set `PI_CODING_AGENT_DIR`, does **not** create a temporary `models.json`, and does **not** disable context files, extensions, skills, prompt templates, themes, or tools. It runs `pi -p` using your normal pi defaults.
-
-Optional overrides still work. For example, to use your current pi config but force a specific model and avoid saving sessions:
-
-```sh
-python3 scripts/bench-llama-suite.py \
-  --transport pi \
-  --pi-current-config \
-  --model qwen \
-  --pi-no-session \
-  --label current-pi-qwen \
-  > /tmp/current-pi-qwen.results.json
-```
-
-Use `--pi-no-tools` with `--pi-current-config` if you want your current config but no tools.
-
-## Context-size sweep
-
-For manual context-size sweeps, run each server/context pair and save the JSON output.
-
-Example for direct HTTP:
-
-```sh
-mkdir -p docs/benchmarks/my-run/raw
-
-for ctx in 32768 65536 131072 262144; do
-  CTX_SIZE="$ctx" ./serve.sh > "docs/benchmarks/my-run/raw/vanilla-ctx${ctx}.server.log" 2>&1 &
-  pid=$!
-  until curl -fsS http://127.0.0.1:8080/health >/dev/null; do sleep 1; done
-
-  python3 scripts/bench-llama-suite.py \
-    --transport http \
-    --label "vanilla-ctx${ctx}" \
-    > "docs/benchmarks/my-run/raw/vanilla-ctx${ctx}.results.json"
-
-  kill "$pid"
-  wait "$pid" 2>/dev/null || true
-  sleep 3
-done
-```
-
-For pi mode, change the client command to:
-
-```sh
-python3 scripts/bench-llama-suite.py \
-  --transport pi \
-  --label "vanilla-ctx${ctx}-pi" \
-  --pi-context-window "$ctx" \
-  > "docs/benchmarks/my-run/raw/vanilla-ctx${ctx}-pi.results.json"
-```
+For a smaller direct-HTTP-only run, set `--transports curl`. For pi-only runs, set `--transports pi-blank` or `--transports pi-current`.
 
 ## Output fields
 
