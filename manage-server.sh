@@ -53,6 +53,7 @@ case "$ACTION" in
     if [ ! -f "$INSTALLED_SERVICE_FILE" ]; then
       install_unit
     fi
+    systemctl --user daemon-reload
     systemctl --user "$ACTION" "$SERVICE_NAME"
     ;;
   *)

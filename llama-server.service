@@ -14,12 +14,13 @@ WorkingDirectory=/home/yuriteixeira/Workspaces/local/services/llama
 ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/buun/src/buun-llama-cpp/build/bin/llama-server \
   --host 0.0.0.0 \
   --port 8080 \
-  --models-preset /home/yuriteixeira/Workspaces/local/services/llama/model-presets.ini
+  --models-preset /home/yuriteixeira/Workspaces/local/services/llama/versions/buun/model-presets.ini \
   --models-max 1 \
-  --verbose \
+  --parallel 1 \
   --metrics
 
 # REMOVED PARAMS (put them back if needed)
+# --verbose \
 # --threads-http 4 \
 
 # Restart policy
