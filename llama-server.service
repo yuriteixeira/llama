@@ -16,8 +16,11 @@ ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/buun/src/b
   --port 8080 \
   --models-preset /home/yuriteixeira/Workspaces/local/services/llama/versions/buun/model-presets.ini \
   --models-max 1 \
-  --threads-http 4 \
+  --verbose \
   --metrics
+
+# REMOVED PARAMS (put them back if needed)
+# --threads-http 4 \
 
 # Restart policy
 Restart=always
