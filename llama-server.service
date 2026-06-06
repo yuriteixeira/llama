@@ -17,6 +17,7 @@ ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/buun/src/b
   --models-preset /home/yuriteixeira/Workspaces/local/services/llama/versions/buun/model-presets.ini \
   --models-max 1 \
   --parallel 1 \
+  --device CUDA0 \
   --metrics
 
 # REMOVED PARAMS (put them back if needed)
