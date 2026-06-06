@@ -11,10 +11,10 @@ Type=simple
 WorkingDirectory=/home/yuriteixeira/Workspaces/local/services/llama
 
 # The router process; per-model arguments live in versions/buun/model-presets.ini
-ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/buun/src/buun-llama-cpp/build/bin/llama-server \
+ExecStart=/home/yuriteixeira/Workspaces/local/services/llama/versions/buun/src/build/bin/llama-server \
   --host 0.0.0.0 \
   --port 8080 \
-  --models-preset /home/yuriteixeira/Workspaces/local/services/llama/versions/buun/model-presets.ini \
+  --models-preset ./model-presets.ini \
   --models-max 1 \
   --parallel 1 \
   --device CUDA0 \

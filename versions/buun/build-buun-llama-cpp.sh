@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_URL="https://github.com/spiritbuun/buun-llama-cpp.git"
-readonly SRC_DIR="$ROOT_DIR/src/buun-llama-cpp"
+readonly SRC_DIR="$ROOT_DIR/src"
 readonly BUILD_DIR="$SRC_DIR/build"
 readonly JOBS="$(nproc)"
 
