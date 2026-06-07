@@ -1,0 +1,3 @@
+[submodule "buun-llama-cpp"]
+	path = versions/buun/src
+	url = git@github.com:spiritbuun/buun-llama-cpp.git
