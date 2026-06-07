@@ -19,10 +19,9 @@ The service is installed to `~/.config/systemd/user/` on first use. It auto-rest
 
 ## Models & Presets
 
-- Models are downloaded using `./scripts/download-recommended-models.sh`
-- All models can be found in `./models`
-- Model presets for `llama-server` are defined in `./model-presets.ini`. The project uses a single model at a time for optimal resource utilization on dedicated headless servers.
-
+- Models are downloaded using `./scripts/download-recommended-models.sh` based in the list of curated models in `./models.txt`
+- Model presets for `llama-server` are defined in `./model-presets.ini`. The project uses a single model at a time for optimal resource utilization on dedicated headless servers. They can be updated based on the models downloaded if you run `./scripts/update-presets.sh`
+- Before updating `./models.txt` with a new model, make sure they are not deny-listed in `./DO-NOT-DOWNLOAD-THESE-MODELS.md`. Make sure this machine's NVRAM + VRAM can fit all the necessary data to run the model correctly (the model itself, context, engine, etc).
 
 ## Hardware
 
