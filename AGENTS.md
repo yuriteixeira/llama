@@ -55,15 +55,44 @@ The submodule points to https://github.com/spiritbuun/buun-llama-cpp.
 
 **Starting the service:**
 
-`llama-server.service` is a user-scoped systemd service for auto-start on login.
+`llama-server.service` is a system-level systemd service intended to start at boot on a headless machine.
+It still runs the `llama-server` process as `yuriteixeira`, not as root.
 
-To make managing it a bit easier, I created `./manage-server.sh`.
+To make managing it easier, use `./manage-server.sh`:
 
-Run `./manage-server.sh install && ./manage-server.sh enable && ./manage-server.sh start`.
+```bash
+./manage-server.sh install
+./manage-server.sh enable
+./manage-server.sh status
+```
 
-Check the logs with `./manage-server.sh logs`
+The install/enable actions use `sudo` to:
 
-The service is installed to `~/.config/systemd/user/` on first use. It auto-restarts on crash (10 s delay).
+- enable and start `nvidia-persistenced.service`
+- copy `./llama-server.service` to `/etc/systemd/system/llama-server.service`
+- reload systemd
+- enable/start `llama-server.service`
+
+Check logs with:
+
+```bash
+./manage-server.sh logs
+```
+
+The service uses these boot-safety choices:
+
+- `After=network.target`, not `network-online.target`, because the server binds `0.0.0.0` and should not block boot waiting for every network interface.
+- `Wants=nvidia-persistenced.service` and `After=nvidia-persistenced.service` so CUDA driver state is kept initialized.
+- A bounded CUDA readiness `ExecStartPre` check using `nvidia-smi`, `llama-server --list-devices`, and `/usr/bin/timeout`.
+- `TimeoutStartSec=30min` so cold GPU initialization can take time without systemd killing the startup.
+
+To simulate the boot-relevant service path without rebooting:
+
+```bash
+./manage-server.sh test-start
+```
+
+This stops `llama-server` and `nvidia-persistenced`, starts only `llama-server`, verifies that NVIDIA persistence is pulled in, and waits for HTTP readiness.
 
 
 **Using the models:**
