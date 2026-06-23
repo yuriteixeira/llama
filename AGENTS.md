@@ -11,19 +11,24 @@ This repository contains a minimal local LLM inference setup using the **buun ll
 
 - Arch Linux with systemd support (but easily adaptable to any linux distro, just change the package manager calls)
 - Git with submodule support
-- NVIDIA GPU with CUDA support (tested on RTX 3070)
+- NVIDIA GPU with CUDA support (tested on RTX 5060 Ti)
 
 Tuned for:
 - **Headless server**: Resources dedicated to only run `llama-server` with 1 model loaded at a time (even though models are loaded dinamically by clients)
-- **GPU:** NVIDIA RTX 3070 (8GB VRAM, compute capability 8.6)
-- **VRAM:** ~7.7 GB device memory
+- **GPU:** NVIDIA RTX 5060 Ti (16GB VRAM)
+- **VRAM:** ~16.3 GB device memory
 - **RAM:** 16 GB system RAM
 - **CPU:** 12 threads available
 
 
 ## Building & Using
 
-Since this project started This project started inspired by the **buun llama.cpp fork** as a git submodule at `./versions/buun/src/`.
+This project supports two llama.cpp forks:
+
+- **buun fork**: `./versions/buun/src/` - includes Turbo KV cache types (turbo2, turbo3, turbo4, turbo8, turbo3_tcq, turbo2_tcq)
+- **upstream fork**: `./versions/upstream/src/` - vanilla ggml-org/llama.cpp with router workflow and standard quantization types
+
+The buun fork is the default, but you can build and use upstream as well.
 
 **Cloning:**
 
@@ -38,19 +43,28 @@ If you already cloned without `--recurse-submodules`:
 git submodule update --init --recursive
 ```
 
-**Updating the fork:**
+**Updating a fork:**
 
 ```bash
 cd versions/buun/src
 git pull origin main  # or master
+
+# or upstream
+ cd ../upstream/src
+git pull origin main
 ```
 
-The submodule points to https://github.com/spiritbuun/buun-llama-cpp.
+- buun fork: https://github.com/spiritbuun/buun-llama-cpp
+- upstream fork: https://github.com/ggerigs/llama.cpp
 
 **Building:**
 
 ```bash
+# Build buun fork (default)
 ./versions/buun/build-buun-llama-cpp.sh
+
+# Build upstream fork
+./versions/upstream/build-upstream-llama-cpp.sh
 ```
 
 **Starting the service:**
@@ -97,12 +111,25 @@ This stops `llama-server` and `nvidia-persistenced`, starts only `llama-server`,
 
 **Using the models:**
 
-My recommendation is https://pi.dev + its [pi-llama-cpp](https://pi.dev/packages/pi-llama-cpp) extension, which will allow to load any models configured in `./model-presets.ini`
+My recommendation is https://pi.dev + its [pi-llama-cpp](https://pi.dev/packages/pi-llama-cpp) extension, which will allow to load any models configured in the selected preset file (`./model-presets.buun.ini` or `./model-presets.upstream.ini`).
+
+**Model Presets:**
+
+- `model-presets.buun.ini` - buun-specific presets (uses Turbo KV cache types)
+- `model-presets.upstream.ini` - upstream-compatible presets (uses standard quantization, requires `--models-preset` flag)
+
+The systemd installer accepts a configurable preset file via `--models-preset`. Default is `./model-presets.buun.ini`. To use upstream presets, run:
+
+```bash
+./manage-server.sh install --models-preset ./model-presets.upstream.ini --bin ./versions/upstream/src/build/bin/llama-server
+```
 
 ## Managing Models & Presets
 
 - Models are downloaded using `./scripts/download-recommended-models.sh` based in the list of curated models in `./models.txt`
-- Model presets for `llama-server` are defined in `./model-presets.ini`. The project uses a single model at a time for optimal resource utilization on dedicated headless servers. They can be updated based on the models downloaded if you run `./scripts/update-presets.sh`
+- Model presets for `llama-server` are defined in `./model-presets.buun.ini` (buun) or `./model-presets.upstream.ini` (upstream)
+- The project uses a single model at a time for optimal resource utilization on dedicated headless servers
+- Presets can be updated based on the models downloaded by running `./scripts/update-presets.sh`
 - Before updating `./models.txt` with a new model, make sure they are not deny-listed in `./DO-NOT-DOWNLOAD-THESE-MODELS.md`. Make sure this machine's NVRAM + VRAM can fit all the necessary data to run the model correctly (the model itself, context, engine, etc).
 
 

@@ -12,7 +12,8 @@ Options:
   --instance <name>     Systemd template instance name (default: same as --user)
   --host <host>         Bind host (default: 0.0.0.0)
   --port <port>         Bind port (default: 8080)
-  --device <device>     llama.cpp device selector (default: CUDA0)
+  --device <device>     CUDA readiness probe device selector (default: CUDA0)
+  --models-preset <path> Model presets path passed to llama-server (default: ./model-presets.buun.ini)
   --models-max <n>      Maximum number of loaded models (default: 1)
   --parallel <n>        Parallel requests/sequences (default: 1)
   --workdir <path>      Repository/service working directory (default: repo root)
@@ -44,7 +45,7 @@ LLAMA_WORKDIR=${LLAMA_WORKDIR}
 LLAMA_BIN=${LLAMA_BIN}
 LLAMA_HOST=${LLAMA_HOST}
 LLAMA_PORT=${LLAMA_PORT}
-LLAMA_MODELS_PRESET=./model-presets.ini
+LLAMA_MODELS_PRESET=${LLAMA_MODELS_PRESET}
 LLAMA_MODELS_MAX=${LLAMA_MODELS_MAX}
 LLAMA_PARALLEL=${LLAMA_PARALLEL}
 LLAMA_DEVICE=${LLAMA_DEVICE}
@@ -66,6 +67,7 @@ LLAMA_BIN=""
 LLAMA_HOST="0.0.0.0"
 LLAMA_PORT="8080"
 LLAMA_DEVICE="CUDA0"
+LLAMA_MODELS_PRESET="./model-presets.buun.ini"
 LLAMA_MODELS_MAX="1"
 LLAMA_PARALLEL="1"
 START_SERVICES=1
@@ -90,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --device)
       LLAMA_DEVICE=${2:?missing value for --device}
+      shift 2
+      ;;
+    --models-preset)
+      LLAMA_MODELS_PRESET=${2:?missing value for --models-preset}
       shift 2
       ;;
     --models-max)
@@ -159,8 +165,14 @@ if [[ ! -x "$LLAMA_BIN" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$LLAMA_WORKDIR/model-presets.ini" ]]; then
-  echo "error: missing model presets file: $LLAMA_WORKDIR/model-presets.ini" >&2
+if [[ "$LLAMA_MODELS_PRESET" = /* ]]; then
+  MODELS_PRESET_PATH="$LLAMA_MODELS_PRESET"
+else
+  MODELS_PRESET_PATH="$LLAMA_WORKDIR/$LLAMA_MODELS_PRESET"
+fi
+
+if [[ ! -f "$MODELS_PRESET_PATH" ]]; then
+  echo "error: missing model presets file: $MODELS_PRESET_PATH" >&2
   exit 1
 fi
 

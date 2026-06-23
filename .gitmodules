@@ -1,3 +1,6 @@
 [submodule "buun-llama-cpp"]
 	path = versions/buun/src
 	url = git@github.com:spiritbuun/buun-llama-cpp.git
+[submodule "upstream-llama-cpp"]
+	path = versions/upstream/src
+	url = https://github.com/ggml-org/llama.cpp.git

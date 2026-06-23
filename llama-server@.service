@@ -1,6 +1,6 @@
 [Unit]
 Description=Llama.cpp Local LLM Server (%i)
-Documentation=https://github.com/spiritbuun/buun-llama-cpp
+Documentation=https://github.com/ggml-org/llama.cpp
 After=network.target nvidia-persistenced.service
 Wants=nvidia-persistenced.service
 
@@ -14,7 +14,7 @@ EnvironmentFile=/etc/llama-server/%i.env
 # Each probe is individually timed out because CUDA probing can hang while the driver is settling.
 ExecStartPre=/bin/sh -lc 'for i in $(seq 1 "$LLAMA_CUDA_PROBE_ATTEMPTS"); do /usr/bin/timeout "$LLAMA_NVIDIA_SMI_TIMEOUT" /usr/bin/nvidia-smi >/dev/null 2>&1 && /usr/bin/timeout "$LLAMA_LIST_DEVICES_TIMEOUT" "$LLAMA_BIN" --list-devices 2>/dev/null | grep -q "$LLAMA_DEVICE" && exit 0; sleep "$LLAMA_CUDA_PROBE_SLEEP"; done; exit 1'
 
-ExecStart=/bin/sh -lc 'cd "$LLAMA_WORKDIR" && exec "$LLAMA_BIN" --host "$LLAMA_HOST" --port "$LLAMA_PORT" --models-preset "$LLAMA_MODELS_PRESET" --models-max "$LLAMA_MODELS_MAX" --parallel "$LLAMA_PARALLEL" --device "$LLAMA_DEVICE" --metrics'
+ExecStart=/bin/sh -lc 'cd "$LLAMA_WORKDIR" && exec "$LLAMA_BIN" --host "$LLAMA_HOST" --port "$LLAMA_PORT" --models-preset "$LLAMA_MODELS_PRESET" --models-max "$LLAMA_MODELS_MAX" --parallel "$LLAMA_PARALLEL" --metrics'
 
 Restart=always
 RestartSec=10

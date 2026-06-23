@@ -7,10 +7,11 @@ readonly SRC_DIR="$ROOT_DIR/src"
 readonly BUILD_DIR="$SRC_DIR/build"
 readonly JOBS="$(nproc)"
 
-# RTX 3070 is Ampere GA104, CUDA compute capability 8.6.
+# Current GPU: RTX 5060 Ti (compute capability 12.0).
+# Rollback/future secondary GPU: RTX 3070 (compute capability 8.6).
 # GGML_NATIVE=ON below handles CPU-side machine-local optimization; this keeps
 # only the GPU-specific architecture setting that CUDA needs.
-readonly CUDA_ARCHITECTURES="86"
+readonly CUDA_ARCHITECTURES="86;120"
 
 # Install build dependencies on Arch Linux.
 # These packages are in the official repositories, so pacman is sufficient; no
@@ -41,8 +42,8 @@ fi
 #   runtime -fa with TCQ KV-cache modes, so build the kernels explicitly.
 # - GGML_CUDA_FA_ALL_QUANTS=ON compiles FlashAttention support for all quantized
 #   formats, which is recommended by the buun README for its TCQ workflows.
-# - CMAKE_CUDA_ARCHITECTURES=86 targets the RTX 3070 directly instead of relying
-#   on CMake's native GPU detection.
+# - CMAKE_CUDA_ARCHITECTURES targets both the current RTX 5060 Ti and RTX 3070
+#   rollback/future secondary GPU instead of relying on CMake's native GPU detection.
 # - GGML_CUDA_NCCL=OFF avoids a harmless missing-NCCL warning on this single-GPU
 #   setup; NCCL mainly matters for multi-GPU performance.
 # - LLAMA_BUILD_TESTS=OFF skips test binaries to reduce build time.
