@@ -12,7 +12,8 @@ Options:
   --instance <name>     Systemd template instance name (default: same as --user)
   --host <host>         Bind host (default: 0.0.0.0)
   --port <port>         Bind port (default: 8080)
-  --device <device>     CUDA readiness probe device selector (default: CUDA0)
+  --device <device>     Legacy single CUDA readiness probe selector (default: CUDA0)
+  --expected-devices <csv> CUDA devices required by readiness probe (default: CUDA0,CUDA1)
   --models-preset <path> Model presets path passed to llama-server (default: ./model-presets.buun.ini)
   --models-max <n>      Maximum number of loaded models (default: 1)
   --parallel <n>        Parallel requests/sequences (default: 1)
@@ -49,6 +50,7 @@ LLAMA_MODELS_PRESET=${LLAMA_MODELS_PRESET}
 LLAMA_MODELS_MAX=${LLAMA_MODELS_MAX}
 LLAMA_PARALLEL=${LLAMA_PARALLEL}
 LLAMA_DEVICE=${LLAMA_DEVICE}
+LLAMA_EXPECTED_DEVICES=${LLAMA_EXPECTED_DEVICES}
 LLAMA_CUDA_PROBE_ATTEMPTS=120
 LLAMA_NVIDIA_SMI_TIMEOUT=5
 LLAMA_LIST_DEVICES_TIMEOUT=10
@@ -67,6 +69,7 @@ LLAMA_BIN=""
 LLAMA_HOST="0.0.0.0"
 LLAMA_PORT="8080"
 LLAMA_DEVICE="CUDA0"
+LLAMA_EXPECTED_DEVICES="CUDA0,CUDA1"
 LLAMA_MODELS_PRESET="./model-presets.buun.ini"
 LLAMA_MODELS_MAX="1"
 LLAMA_PARALLEL="1"
@@ -92,6 +95,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --device)
       LLAMA_DEVICE=${2:?missing value for --device}
+      shift 2
+      ;;
+    --expected-devices)
+      LLAMA_EXPECTED_DEVICES=${2:?missing value for --expected-devices}
       shift 2
       ;;
     --models-preset)
