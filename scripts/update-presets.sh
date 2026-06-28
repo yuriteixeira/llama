@@ -3,16 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODELS_DIR="$ROOT_DIR/models"
-PRESETS=("$ROOT_DIR/model-presets.buun.ini" "$ROOT_DIR/model-presets.upstream.ini")
+PRESETS=(
+  "$ROOT_DIR/model-presets.buun.ini"
+  "$ROOT_DIR/model-presets.upstream.ini"
+  "$ROOT_DIR/model-presets.turboquant.ini"
+)
 
 usage() {
   cat <<'EOF'
 Usage: scripts/update-presets.sh [--preset <path>]...
 
 Adds local .gguf models missing from preset files.
-By default, updates both split preset files:
+By default, updates all split preset files:
   - ./model-presets.buun.ini
   - ./model-presets.upstream.ini
+  - ./model-presets.turboquant.ini
 EOF
 }
 

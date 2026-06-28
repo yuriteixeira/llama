@@ -23,12 +23,13 @@ Tuned for:
 
 ## Building & Using
 
-This project supports two llama.cpp forks:
+This project supports three llama.cpp forks:
 
 - **buun fork**: `./versions/buun/src/` - includes Turbo KV cache types (turbo2, turbo3, turbo4, turbo8, turbo3_tcq, turbo2_tcq)
 - **upstream fork**: `./versions/upstream/src/` - vanilla ggml-org/llama.cpp with router workflow and standard quantization types
+- **TurboQuant+ fork**: `./versions/turboquant/src/` - TheTom/llama-cpp-turboquant with TurboQuant+ KV cache types (turbo2, turbo3, turbo4) and TQ3_1S/TQ4_1S weight quantization
 
-The buun fork is the default, but you can build and use upstream as well.
+The buun fork is the default, but you can build and use upstream or TurboQuant+ as well.
 
 **Cloning:**
 
@@ -46,16 +47,18 @@ git submodule update --init --recursive
 **Updating a fork:**
 
 ```bash
-cd versions/buun/src
-git pull origin main  # or master
+git -C versions/buun/src pull origin main  # or master
 
 # or upstream
- cd ../upstream/src
-git pull origin main
+git -C versions/upstream/src pull origin master
+
+# or TurboQuant+
+git -C versions/turboquant/src pull origin feature/turboquant-kv-cache
 ```
 
 - buun fork: https://github.com/spiritbuun/buun-llama-cpp
-- upstream fork: https://github.com/ggerigs/llama.cpp
+- upstream fork: https://github.com/ggml-org/llama.cpp
+- TurboQuant+ fork: https://github.com/TheTom/llama-cpp-turboquant
 
 **Building:**
 
@@ -65,6 +68,9 @@ git pull origin main
 
 # Build upstream fork
 ./versions/upstream/build-upstream-llama-cpp.sh
+
+# Build TurboQuant+ fork
+./versions/turboquant/build-turboquant-llama-cpp.sh
 ```
 
 **Starting the service:**
@@ -111,12 +117,13 @@ This stops `llama-server` and `nvidia-persistenced`, starts only `llama-server`,
 
 **Using the models:**
 
-My recommendation is https://pi.dev + its [pi-llama-cpp](https://pi.dev/packages/pi-llama-cpp) extension, which will allow to load any models configured in the selected preset file (`./model-presets.buun.ini` or `./model-presets.upstream.ini`).
+My recommendation is https://pi.dev + its [pi-llama-cpp](https://pi.dev/packages/pi-llama-cpp) extension, which will allow to load any models configured in the selected preset file (`./model-presets.buun.ini`, `./model-presets.upstream.ini`, or `./model-presets.turboquant.ini`).
 
 **Model Presets:**
 
 - `model-presets.buun.ini` - buun-specific presets (uses Turbo KV cache types)
 - `model-presets.upstream.ini` - upstream-compatible presets (uses standard quantization, requires `--models-preset` flag)
+- `model-presets.turboquant.ini` - TurboQuant+-compatible presets (uses `q8_0` K cache with `turbo3` V cache by default)
 
 The systemd installer accepts a configurable preset file via `--models-preset`. Default is `./model-presets.buun.ini`. To use upstream presets, run:
 
@@ -124,10 +131,16 @@ The systemd installer accepts a configurable preset file via `--models-preset`. 
 ./manage-server.sh install --models-preset ./model-presets.upstream.ini --bin ./versions/upstream/src/build/bin/llama-server
 ```
 
+To use TurboQuant+ presets, run:
+
+```bash
+./manage-server.sh install --models-preset ./model-presets.turboquant.ini --bin ./versions/turboquant/src/build/bin/llama-server
+```
+
 ## Managing Models & Presets
 
 - Models are downloaded using `./scripts/download-recommended-models.sh` based in the list of curated models in `./models.txt`
-- Model presets for `llama-server` are defined in `./model-presets.buun.ini` (buun) or `./model-presets.upstream.ini` (upstream)
+- Model presets for `llama-server` are defined in `./model-presets.buun.ini` (buun), `./model-presets.upstream.ini` (upstream), or `./model-presets.turboquant.ini` (TurboQuant+)
 - The project uses a single model at a time for optimal resource utilization on dedicated headless servers
 - Presets can be updated based on the models downloaded by running `./scripts/update-presets.sh`
 - Before updating `./models.txt` with a new model, make sure they are not deny-listed in `./DO-NOT-DOWNLOAD-THESE-MODELS.md`. Make sure this machine's NVRAM + VRAM can fit all the necessary data to run the model correctly (the model itself, context, engine, etc).

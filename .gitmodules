@@ -4,3 +4,7 @@
 [submodule "upstream-llama-cpp"]
 	path = versions/upstream/src
 	url = https://github.com/ggml-org/llama.cpp.git
+[submodule "turboquant-llama-cpp"]
+	path = versions/turboquant/src
+	url = https://github.com/TheTom/llama-cpp-turboquant.git
+	branch = feature/turboquant-kv-cache
