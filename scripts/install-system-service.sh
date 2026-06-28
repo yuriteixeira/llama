@@ -14,11 +14,11 @@ Options:
   --port <port>         Bind port (default: 8080)
   --device <device>     Legacy single CUDA readiness probe selector (default: CUDA0)
   --expected-devices <csv> CUDA devices required by readiness probe (default: CUDA0,CUDA1)
-  --models-preset <path> Model presets path passed to llama-server (default: ./model-presets.buun.ini)
+  --models-preset <path> Model presets path passed to llama-server (default: ./model-presets.upstream.ini)
   --models-max <n>      Maximum number of loaded models (default: 1)
   --parallel <n>        Parallel requests/sequences (default: 1)
   --workdir <path>      Repository/service working directory (default: repo root)
-  --bin <path>          llama-server binary path (default: <workdir>/versions/buun/src/build/bin/llama-server)
+  --bin <path>          llama-server binary path (default: <workdir>/versions/upstream/src/build/bin/llama-server)
   --no-start            Install files and reload systemd, but do not enable/start services
   -h, --help            Show this help
 USAGE
@@ -70,7 +70,7 @@ LLAMA_HOST="0.0.0.0"
 LLAMA_PORT="8080"
 LLAMA_DEVICE="CUDA0"
 LLAMA_EXPECTED_DEVICES="CUDA0,CUDA1"
-LLAMA_MODELS_PRESET="./model-presets.buun.ini"
+LLAMA_MODELS_PRESET="./model-presets.upstream.ini"
 LLAMA_MODELS_MAX="1"
 LLAMA_PARALLEL="1"
 START_SERVICES=1
@@ -138,7 +138,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 INSTANCE=${INSTANCE:-$SERVICE_USER}
-LLAMA_BIN=${LLAMA_BIN:-$LLAMA_WORKDIR/versions/buun/src/build/bin/llama-server}
+LLAMA_BIN=${LLAMA_BIN:-$LLAMA_WORKDIR/versions/upstream/src/build/bin/llama-server}
 SERVICE_NAME="llama-server@${INSTANCE}.service"
 ENV_FILE="/etc/llama-server/${INSTANCE}.env"
 UNIT_SOURCE="$REPO_DIR/llama-server@.service"

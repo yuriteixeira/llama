@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository contains a minimal local LLM inference setup using the **buun llama.cpp fork** (inspired by the tutorials found in https://www.youtube.com/@Codacus) to serve large language models as an API server on local hardware. 
+This repository contains a minimal local LLM inference setup using the **llama.cpp**. Both upstream and forks (that implement the turbo cache types, which is explored in the tutorials found in https://www.youtube.com/@Codacus) are provided as submodules, which will be the engine that serve large language models as an API server on local hardware. 
 
 **IMPORTANT**: Fork it right away because it will likely not work for you out of the box. Use it as an inspiration. All I hope is to save you some research time to curate a solution that fits your needs.
 
@@ -25,11 +25,11 @@ Tuned for:
 
 This project supports three llama.cpp forks:
 
-- **buun fork**: `./versions/buun/src/` - includes Turbo KV cache types (turbo2, turbo3, turbo4, turbo8, turbo3_tcq, turbo2_tcq)
 - **upstream fork**: `./versions/upstream/src/` - vanilla ggml-org/llama.cpp with router workflow and standard quantization types
 - **TurboQuant+ fork**: `./versions/turboquant/src/` - TheTom/llama-cpp-turboquant with TurboQuant+ KV cache types (turbo2, turbo3, turbo4) and TQ3_1S/TQ4_1S weight quantization
+- **buun fork**: `./versions/buun/src/` - includes Turbo KV cache types (turbo2, turbo3, turbo4, turbo8, turbo3_tcq, turbo2_tcq)
 
-The installer is pre-configured to use the buun fork by default, but you can build and use upstream or TurboQuant+ instead.
+The installer is pre-configured to use the upstream fork by default, but you can build and use buun or TurboQuant+ instead.
 
 **Cloning:**
 
@@ -63,11 +63,11 @@ git -C versions/turboquant/src pull origin feature/turboquant-kv-cache
 **Building:**
 
 ```bash
-# Build buun fork (pre-configured default)
-./versions/buun/build-buun-llama-cpp.sh
-
-# Build upstream fork
+# Build upstream (pre-configured default)
 ./versions/upstream/build-upstream-llama-cpp.sh
+
+# Build buun fork
+./versions/buun/build-buun-llama-cpp.sh
 
 # Build TurboQuant+ fork
 ./versions/turboquant/build-turboquant-llama-cpp.sh
@@ -121,14 +121,14 @@ My recommendation is https://pi.dev + its [pi-llama-cpp](https://pi.dev/packages
 
 **Model Presets:**
 
-- `model-presets.buun.ini` - buun-specific presets (uses Turbo KV cache types)
 - `model-presets.upstream.ini` - upstream-compatible presets (uses standard quantization, requires `--models-preset` flag)
+- `model-presets.buun.ini` - buun-specific presets (uses Turbo KV cache types)
 - `model-presets.turboquant.ini` - TurboQuant+-compatible presets (uses `q8_0` K cache with `turbo3` V cache by default)
 
-The systemd installer defaults to `./model-presets.buun.ini` (buun fork). You can override it via `--models-preset`. To use upstream presets, run:
+The systemd installer defaults to `./model-presets.upstream.ini` (upstream fork). You can override it via `--models-preset`. To use buun presets, run:
 
 ```bash
-./manage-server.sh install --models-preset ./model-presets.upstream.ini --bin ./versions/upstream/src/build/bin/llama-server
+./manage-server.sh install --models-preset ./model-presets.buun.ini --bin ./versions/buun/src/build/bin/llama-server
 ```
 
 To use TurboQuant+ presets, run:
@@ -140,7 +140,7 @@ To use TurboQuant+ presets, run:
 ## Managing Models & Presets
 
 - Models are downloaded using `./scripts/download-recommended-models.sh` based in the list of curated models in `./models.txt`
-- Model presets for `llama-server` are defined in `./model-presets.buun.ini` (buun), `./model-presets.upstream.ini` (upstream), or `./model-presets.turboquant.ini` (TurboQuant+)
+- Model presets for `llama-server` are defined in `./model-presets.upstream.ini` (upstream), `./model-presets.buun.ini` (buun), or `./model-presets.turboquant.ini` (TurboQuant+)
 - The project uses a single model at a time for optimal resource utilization on dedicated headless servers
 - Presets can be updated based on the models downloaded by running `./scripts/update-presets.sh`
 - Before updating `./models.txt` with a new model, make sure they are not deny-listed in `./DO-NOT-DOWNLOAD-THESE-MODELS.md`. Make sure this machine's NVRAM + VRAM can fit all the necessary data to run the model correctly (the model itself, context, engine, etc).
