@@ -1,9 +1,9 @@
 # Recommended local LLM candidates for the current 16GB VRAM host.
 # One URL per line; blank lines and comments are ignored by scripts/download-recommended-models.sh.
 
-# Best high-end coding/smart candidates for 16GB VRAM. Prefer IQ/UD quants for fit + context headroom.
-https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf?download=true
-https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-IQ4_NL.gguf?download=true
+# Primary high-end coding/smart model for the 16GB RTX 5060 Ti.
+# Q3_K_XL (~12.24 GiB) leaves safer runtime and 32K-context headroom than IQ4_XS.
+https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q3_K_XL.gguf?download=true
 
 
 # Gemma 4 QAT candidates from recent 16GB VRAM discussions/videos.

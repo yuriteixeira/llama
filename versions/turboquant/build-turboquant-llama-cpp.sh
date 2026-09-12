@@ -12,6 +12,12 @@ readonly JOBS="$(nproc)"
 readonly CUDA_ARCHITECTURES="86;120"
 readonly DEFAULT_BRANCH="feature/turboquant-kv-cache"
 
+if command -v ninja >/dev/null 2>&1; then
+  readonly -a CMAKE_GENERATOR=(-G Ninja)
+else
+  readonly -a CMAKE_GENERATOR=(-G "Unix Makefiles")
+fi
+
 export PATH="/opt/cuda/bin:$PATH"
 
 if git -C "$SRC_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -39,7 +45,7 @@ fi
 # - GGML_CUDA_GRAPHS=ON keeps parity with the upstream build script.
 # - CMAKE_CUDA_ARCHITECTURES targets both the current RTX 5060 Ti and RTX 3070
 #   rollback/future secondary GPU instead of relying on CMake's native GPU detection.
-cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G Ninja \
+cmake -S "$SRC_DIR" -B "$BUILD_DIR" "${CMAKE_GENERATOR[@]}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" \
   -DLLAMA_BUILD_TESTS=OFF \
