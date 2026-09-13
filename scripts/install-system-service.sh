@@ -12,9 +12,9 @@ Options:
   --instance <name>     Systemd template instance name (default: same as --user)
   --host <host>         Bind host (default: 0.0.0.0)
   --port <port>         Bind port (default: 8080)
-  --device <device>     Legacy single CUDA readiness probe selector (default: CUDA0)
+  --device <device>     Legacy single CUDA readiness probe selector (default: CUDA1)
   --expected-devices <csv> CUDA devices required by readiness probe (default: CUDA0,CUDA1)
-  --models-preset <path> Model presets path passed to llama-server (default: ./model-presets.upstream.ini)
+  --model-presets <path> Model presets path passed to llama-server (default: ./model-presets.upstream.ini)
   --models-max <n>      Maximum number of loaded models (default: 1)
   --parallel <n>        Parallel requests/sequences (default: 1)
   --workdir <path>      Repository/service working directory (default: repo root)
@@ -68,7 +68,7 @@ LLAMA_WORKDIR="$REPO_DIR"
 LLAMA_BIN=""
 LLAMA_HOST="0.0.0.0"
 LLAMA_PORT="8080"
-LLAMA_DEVICE="CUDA0"
+LLAMA_DEVICE="CUDA1"
 LLAMA_EXPECTED_DEVICES="CUDA0,CUDA1"
 LLAMA_MODELS_PRESET="./model-presets.upstream.ini"
 LLAMA_MODELS_MAX="1"
@@ -101,8 +101,8 @@ while [[ $# -gt 0 ]]; do
       LLAMA_EXPECTED_DEVICES=${2:?missing value for --expected-devices}
       shift 2
       ;;
-    --models-preset)
-      LLAMA_MODELS_PRESET=${2:?missing value for --models-preset}
+    --model-presets)
+      LLAMA_MODELS_PRESET=${2:?missing value for --model-presets}
       shift 2
       ;;
     --models-max)
