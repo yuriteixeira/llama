@@ -7,32 +7,9 @@ fail() {
 }
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-upstream}"
-[[ $# -le 2 ]] || fail 'usage: ./manage-server.sh update-build [version] [branch]'
-
-case "$VERSION" in
-  upstream)
-    REPO_URL='https://github.com/ggml-org/llama.cpp.git'
-    DEFAULT_BRANCH=master
-    ;;
-  buun)
-    REPO_URL='https://github.com/spiritbuun/buun-llama-cpp.git'
-    DEFAULT_BRANCH=master
-    ;;
-  turboquant)
-    REPO_URL='https://github.com/TheTom/llama-cpp-turboquant.git'
-    DEFAULT_BRANCH=feature/turboquant-kv-cache
-    ;;
-  *) fail "unknown version: $VERSION (use upstream, buun, or turboquant)" ;;
-esac
-
-BRANCH="${2:-$DEFAULT_BRANCH}"
-git check-ref-format "refs/heads/$BRANCH" >/dev/null || fail "invalid branch: $BRANCH"
-[[ "$BRANCH" != -* ]] || fail "invalid branch: $BRANCH"
-SRC_DIR="$ROOT_DIR/versions/$VERSION/src"
+source "$ROOT_DIR/scripts/version-source.sh" "$@"
 BUILD_SCRIPT="$ROOT_DIR/versions/$VERSION/build-$VERSION-llama-cpp.sh"
 [[ -f "$BUILD_SCRIPT" ]] || fail "missing build script: $BUILD_SCRIPT"
-
 if [[ ! -e "$SRC_DIR" ]]; then
   git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$SRC_DIR"
 else

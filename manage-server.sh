@@ -9,6 +9,7 @@ Actions:
   install      Install/update the systemd template service and env file
   download-models  Download and verify models from the selected preset
   update-build [version] [branch]  Fetch the latest source and compile it
+  changelog [version] [branch]  Summarize remote changes without updating or compiling
   enable       Enable the service at boot
   start        Start the service
   stop         Stop the service
@@ -23,6 +24,7 @@ Installer options after "install" are forwarded to scripts/install-system-servic
 The download-models action uses PRESET and MAX_JOBS from the environment.
 The update-build action defaults to upstream master. Fork defaults are master
 for buun and feature/turboquant-kv-cache for turboquant. It does not restart the service.
+The changelog action uses pi -p and saves /tmp/llama-<version>-summary-YYYY-MM-DD.md.
 USAGE
 }
 
@@ -63,6 +65,9 @@ case "$ACTION" in
     ;;
   update-build)
     exec bash "$SCRIPT_DIR/scripts/update-build.sh" "$@"
+    ;;
+  changelog)
+    exec bash "$SCRIPT_DIR/scripts/changelog.sh" "$@"
     ;;
   enable)
     sudo systemctl enable "$SERVICE_NAME"
