@@ -15,7 +15,8 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 {
   printf '# %s - Summary for `%s (branch: %s)`\n\n' "$REPORT_DATE" "$VERSION" "$BRANCH"
   printf -- '- Current:          %s\n' "$(git -C "$SRC_DIR" show -s --format='%h (%cs)' "$PREVIOUS_COMMIT")"
-  printf -- '- Latest in Remote: %s\n\n' "$(git -C "$SRC_DIR" show -s --format='%h (%cs)' "$NEW_COMMIT")"
+  printf -- '- Latest in Remote: %s\n' "$(git -C "$SRC_DIR" show -s --format='%h (%cs)' "$NEW_COMMIT")"
+  printf -- '- New commits:      %s\n\n' "$(git -C "$SRC_DIR" rev-list --count "$PREVIOUS_COMMIT..$NEW_COMMIT")"
 } > "$TEMP_DIR/summary.md"
 
 if [[ "$PREVIOUS_COMMIT" = "$NEW_COMMIT" ]]; then
@@ -49,6 +50,9 @@ Use the supplied user preset configuration only to assess relevance, not as evid
   PROMPT+='
 
 Also assess relevance to the detected CPU model and instruction flags, system memory, GPU models, GPU memory, NVIDIA compute capabilities, and driver version. Mark relevant entries **HARDWARE RELEVANT**: and name the affected component or limit. An entry may have both preset and hardware markers, but **BREAKING CHANGE**: must remain first when applicable. Prioritize changes to applicable CPU instruction paths, CUDA kernels, GPU architecture support, memory use, and GPU splitting. Connect hardware relevance to the supplied preset settings when supported by commit messages. Hardware specs are context, not proof of performance gains. Do not assume unavailable specs, installed CUDA toolkit versions, guaranteed free memory, or a mapping between NVIDIA indices and preset CUDA device names. Memory availability is only a current snapshot. Distinguish confirmed relevance from possible effects that require testing. Keep the three sections and final date and commit references.'
+  PROMPT+='
+
+For every entry marked **PRESET RELEVANT**: or **HARDWARE RELEVANT**:, include exactly one sentence introduced by **Why this matters:**. In that sentence, connect the change to a specific configured preset, setting, or detected hardware component and explain the practical effect or what needs testing. If both markers apply, use one combined sentence. Keep it in the same bullet entry before the final date and commit references. Do not use a generic claim of relevance.'
   if ! pi -p --no-session --no-tools --no-extensions --no-skills --no-context-files \
     "@$TEMP_DIR/changes.md" "$PROMPT" > "$TEMP_DIR/sections.md"; then
     echo 'error: Pi summary failed; previous report was not replaced' >&2

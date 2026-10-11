@@ -29,5 +29,6 @@ if [[ ! -r "$PRESET_FILE" ]]; then
 fi
 REPORT_DATE="$(date +%F)"
 SUMMARY_FILE="/tmp/llama-$VERSION-summary-$REPORT_DATE.md"
+echo "Prompt started: Pi is summarizing commits ${PREVIOUS_COMMIT:0:7}..${NEW_COMMIT:0:7} (this can take a while)"
 bash "$ROOT_DIR/scripts/summarize-source-update.sh" \
   "$SRC_DIR" "$PREVIOUS_COMMIT" "$NEW_COMMIT" "$SUMMARY_FILE" "$VERSION" "$BRANCH" "$REPORT_DATE" "$PRESET_FILE"
