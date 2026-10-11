@@ -1,4 +1,5 @@
 *.pyc
+wget-log
 
 /models/
 /versions/**/src
