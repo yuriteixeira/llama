@@ -14,7 +14,7 @@ EnvironmentFile=/etc/llama-server/%i.env
 # Each probe is individually timed out because CUDA probing can hang while the driver is settling.
 ExecStartPre=/bin/sh -lc 'expected_devices="${LLAMA_EXPECTED_DEVICES:-$LLAMA_DEVICE}"; for i in $(seq 1 "$LLAMA_CUDA_PROBE_ATTEMPTS"); do if /usr/bin/timeout "$LLAMA_NVIDIA_SMI_TIMEOUT" /usr/bin/nvidia-smi >/dev/null 2>&1; then devices=$(/usr/bin/timeout "$LLAMA_LIST_DEVICES_TIMEOUT" "$LLAMA_BIN" --list-devices 2>/dev/null || true); ok=1; for dev in $(printf "%s" "$expected_devices" | tr "," " "); do printf "%s\n" "$devices" | grep -q "$dev" || ok=0; done; [ "$ok" -eq 1 ] && exit 0; fi; sleep "$LLAMA_CUDA_PROBE_SLEEP"; done; exit 1'
 
-ExecStart=/bin/sh -lc 'cd "$LLAMA_WORKDIR" && exec "$LLAMA_BIN" --host "$LLAMA_HOST" --port "$LLAMA_PORT" --models-preset "$LLAMA_MODELS_PRESET" --models-max "$LLAMA_MODELS_MAX" --parallel "$LLAMA_PARALLEL" --metrics'
+ExecStart=/bin/sh -lc 'cd "$LLAMA_WORKDIR" && exec "$LLAMA_BIN" --host "$LLAMA_HOST" --port "$LLAMA_PORT" --models-preset "$LLAMA_MODELS_PRESET" --models-max "$LLAMA_MODELS_MAX" --parallel "$LLAMA_PARALLEL" --metrics --ui-mcp-proxy'
 
 Restart=always
 RestartSec=10
