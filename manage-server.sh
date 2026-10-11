@@ -7,6 +7,7 @@ Usage: ./manage-server.sh [--instance <name>] <action> [installer options]
 
 Actions:
   install      Install/update the systemd template service and env file
+  download-models  Download and verify models from the selected preset
   enable       Enable the service at boot
   start        Start the service
   stop         Stop the service
@@ -18,6 +19,7 @@ Actions:
 
 Instance defaults to $LLAMA_SERVICE_INSTANCE or $USER.
 Installer options after "install" are forwarded to scripts/install-system-service.sh.
+The download-models action uses PRESET and MAX_JOBS from the environment.
 USAGE
 }
 
@@ -52,6 +54,9 @@ SERVICE_NAME="llama-server@${INSTANCE}.service"
 case "$ACTION" in
   install)
     exec "$SCRIPT_DIR/scripts/install-system-service.sh" --instance "$INSTANCE" --user "$INSTANCE" "$@"
+    ;;
+  download-models)
+    exec "$SCRIPT_DIR/scripts/download-preset-models.sh" "$@"
     ;;
   enable)
     sudo systemctl enable "$SERVICE_NAME"
