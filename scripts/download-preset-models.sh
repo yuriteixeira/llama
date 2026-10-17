@@ -62,11 +62,50 @@ remote_checksum() {
   printf '%s\n' "$checksum"
 }
 
+file_signature() {
+  # Include precise timestamps to detect changes even when the size stays the same.
+  stat -L --printf='%d:%i:%s:%y:%z' -- "$1"
+}
+
+save_checksum_cache() {
+  local dest="$1" signature="$2" checksum="$3"
+  local cache="$dest.sha256-cache" temporary
+
+  # A cache write failure must not prevent verification or downloads.
+  if temporary="$(mktemp -- "$cache.XXXXXX")"; then
+    if ! { printf '%s\n%s\n' "$signature" "$checksum" > "$temporary" &&
+      mv -fT -- "$temporary" "$cache"; }; then
+      rm -f -- "$temporary"
+    fi
+  fi
+  return 0
+}
+
 matches_checksum() {
-  local actual
-  echo "Checking local SHA256 checksum: $1" >&2
-  actual="$(sha256sum -- "$1")" || return
-  [[ "${actual%% *}" = "$2" ]]
+  local dest="$1" expected="$2"
+  local signature actual cached_signature cached_checksum
+  signature="$(file_signature "$dest")" || return
+  if [[ -f "$dest.sha256-cache" && -r "$dest.sha256-cache" ]]; then
+    {
+      IFS= read -r cached_signature &&
+        IFS= read -r cached_checksum
+    } < "$dest.sha256-cache" || cached_checksum=""
+    if [[ "$cached_signature" = "$signature" && "$cached_checksum" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "Using cached local SHA256 checksum: $dest" >&2
+      [[ "$cached_checksum" = "$expected" ]]
+      return
+    fi
+  fi
+
+  echo "Checking local SHA256 checksum: $dest" >&2
+  actual="$(sha256sum -- "$dest")" || return
+  actual="${actual%% *}"
+  if [[ "$(file_signature "$dest")" != "$signature" ]]; then
+    echo "error: file changed during checksum calculation: $dest" >&2
+    return 1
+  fi
+  save_checksum_cache "$dest" "$signature" "$actual"
+  [[ "$actual" = "$expected" ]]
 }
 
 confirm_download() {
@@ -133,6 +172,10 @@ download_one() {
     return 1
   fi
   mv -- "$partial" "$dest" || return
+  rm -f -- "$partial.sha256-cache"
+  local signature
+  signature="$(file_signature "$dest")" || return
+  save_checksum_cache "$dest" "$signature" "$checksum"
   echo "Download complete and checksum verified: $dest"
 }
 
@@ -143,6 +186,6 @@ run_downloads() {
     | xargs -0 -n 1 -P "$MAX_JOBS" bash -c 'download_one "$1"' _
 }
 
-export -f download_one matches_checksum
+export -f download_one matches_checksum file_signature save_checksum_cache
 
 run_downloads
