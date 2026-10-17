@@ -23,7 +23,7 @@ repository_name() {
   local suffix prefix
 
   # Remove the quantization suffix to get the model name.
-  for suffix in '-UD-*' '-IQ[0-9]*' '-Q[0-9]*' '-BF16*' '-F16*' '-F32*'; do
+  for suffix in '-UD-*' '-QAD-*' '-IQ[0-9]*' '-Q[0-9]*' '-BF16*' '-F16*' '-F32*'; do
     prefix="${name%%$suffix}"
     if [[ "$prefix" != "$name" ]]; then
       printf '%s-GGUF\n' "$prefix"
