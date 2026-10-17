@@ -1,0 +1,2 @@
+- do not create tests for code you generate unless I ask you to
+- do not update README with implementation details (new args for commands ALREADY there are ok tho)
